@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<!-- Fully self-contained: the Python runtime is bundled, and the browser may only talk to this site.
+     Commands pasted here can never be sent anywhere else. -->
+		<meta
+			http-equiv="Content-Security-Policy"
+			content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; connect-src 'self'; style-src 'self'; img-src 'self' data:; worker-src 'self' blob:; base-uri 'none'; form-action 'none'"
+		/>
+		<meta name="referrer" content="no-referrer" />
+		<meta name="color-scheme" content="light dark" />
+		<title>PowerDetect</title>
+		<link rel="stylesheet" href="style.css" />
+	</head>
+	<body>
+		<header class="bar">
+			<div class="wrap bar-in">
+				<span class="mark">PowerDetect</span>
+				<span class="sub">Static triage for PowerShell command lines</span>
+				<span class="grow"></span>
+				<span
+					class="meta"
+					id="meta"
+					title="The Python runtime is bundled with this page. The browser is only allowed to talk to this site."
+					>Loading engine</span
+				>
+			</div>
+		</header>
+
+		<main class="wrap">
+			<section class="input panel" aria-label="Input">
+				<div class="seg" role="radiogroup" aria-label="Input type">
+					<label
+						><input type="radio" name="kind" value="lines" checked /><span
+							>Command per line</span
+						></label
+					>
+					<label
+						><input type="radio" name="kind" value="whole" /><span
+							>Single script</span
+						></label
+					>
+					<label
+						><input type="radio" name="kind" value="csv" /><span
+							>Defender CSV</span
+						></label
+					>
+					<label
+						><input type="radio" name="kind" value="json" /><span
+							>Alert JSON</span
+						></label
+					>
+				</div>
+				<textarea
+					id="input"
+					spellcheck="false"
+					autocomplete="off"
+					aria-label="Commands to analyze"
+					placeholder="Paste ProcessCommandLine values, one per line, or drop a CSV / JSON export here."
+				></textarea>
+				<div class="controls">
+					<label class="btn file"
+						><input type="file" id="file" accept=".csv,.json,.txt,.ps1,.log" />Open
+						file</label
+					>
+					<button type="button" id="example" class="btn">Examples</button>
+					<label class="check"
+						><input type="checkbox" id="usedb" checked /> Fingerprint DB
+						<span id="dbcount" class="dim"></span
+					></label>
+					<label class="check"
+						><input type="checkbox" id="onlyflagged" /> Hide LOW</label
+					>
+					<span class="grow"></span>
+					<span class="hint">Ctrl+Enter</span>
+					<button type="button" id="run" class="btn go" disabled>Analyze</button>
+				</div>
+				<p id="status" class="status" role="status" aria-live="polite"></p>
+			</section>
+
+			<section id="results" hidden>
+				<div class="stats panel" id="counts"></div>
+				<div class="tools">
+					<span class="dim" id="runinfo"></span>
+					<span class="grow"></span>
+					<button type="button" id="exp-json" class="btn">Export JSON</button>
+					<button type="button" id="exp-fp" class="btn">Export fingerprints</button>
+				</div>
+				<div id="clusters"></div>
+				<div id="cards" class="cards"></div>
+			</section>
+		</main>
+
+		<footer class="wrap foot">
+			<p>
+				Commands are parsed and deobfuscated as text. Nothing is executed and
+				nothing leaves this page. <br />LOW means no known attack behaviour was
+				found, not that a command is safe.
+			</p>
+			<br />
+			<p class="dim">
+				Fingerprints derived from
+				<a
+					href="https://github.com/redcanaryco/atomic-red-team"
+					rel="noopener noreferrer"
+					>Atomic Red Team</a
+				>
+				(MIT) and
+				<a href="https://github.com/LOLBAS-Project/LOLBAS" rel="noopener noreferrer"
+					>LOLBAS</a
+				>
+				(GPL-3.0). Runtime:
+				<a href="https://pyodide.org" rel="noopener noreferrer">Pyodide</a> 0.27.2
+				(MPL-2.0). ATT&amp;CK is a trademark of The MITRE Corporation.
+			</p>
+		</footer>
+
+		<script src="pyodide/pyodide.js"></script>
+		<script src="app.js"></script>
+	</body>
+</html>

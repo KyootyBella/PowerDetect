@@ -1,0 +1,23 @@
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+dist/
+build/
+
+# Generated website (built by tools/build_site.py, deployed by GitHub Actions)
+docs/
+
+# Pyodide runtime (fetched and hash-checked by tools/fetch_pyodide.py)
+vendor/
+
+# Downloaded third-party attack data and local diagnostics
+# (regenerate with tools/build_fingerprint_db.py and tools/evaluate.py)
+data/sources/
+data/*.txt
+
+# Local editor and assistant settings
+.claude/
+.vscode/
+.idea/

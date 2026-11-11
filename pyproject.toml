@@ -1,0 +1,36 @@
+[project]
+name = "powerdetect"
+version = "0.1.0"
+description = "Deterministic static triage of (obfuscated) PowerShell command lines for SOC analysts"
+readme = "README.md"
+authors = [{ name = "KyootyBella" }]
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = []
+keywords = ["powershell", "deobfuscation", "soc", "defender", "dfir", "threat-detection", "mitre-attack"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Security",
+    "Intended Audience :: Information Technology",
+]
+
+[project.scripts]
+powerdetect = "powerdetect.__main__:main_entry"
+
+[dependency-groups]
+data = [
+    "pyyaml>=6.0.3",
+]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

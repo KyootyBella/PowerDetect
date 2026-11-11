@@ -1,0 +1,134 @@
+# Benign admin / SCCM / Intune commands. Every line MUST score LOW.
+# Lines starting with "ENC: " are wrapped as an SCCM-style hidden -EncodedCommand launch.
+Get-Service | Where-Object Status -eq Running
+Get-ChildItem C:\Users -Recurse | Measure-Object
+powershell -ExecutionPolicy Bypass -File C:\scripts\backup.ps1
+powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\Program Files\Microsoft Intune Management Extension\Policies\Scripts\detect.ps1"
+Get-Process | Sort-Object CPU -Descending | Select-Object -First 10
+whoami /all
+Import-Module ActiveDirectory; Get-ADUser -Filter * | Export-Csv users.csv
+Get-WmiObject Win32_OperatingSystem | Select-Object Caption, Version
+Get-CimInstance Win32_LogicalDisk | Select-Object DeviceID, FreeSpace, Size
+Test-NetConnection -ComputerName fileserver01 -Port 445
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+Invoke-WebRequest -Uri https://download.microsoft.com/download/teams/TeamsSetup.msi -OutFile $env:TEMP\TeamsSetup.msi; Start-Process msiexec.exe -ArgumentList '/i', "$env:TEMP\TeamsSetup.msi", '/qn' -Wait
+winget install --id Git.Git -e --source winget
+choco upgrade all -y
+Install-Module PSWindowsUpdate -Force -Scope AllUsers; Get-WindowsUpdate -AcceptAll -Install
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+Set-ExecutionPolicy Unrestricted -Scope LocalMachine -Force
+Register-ScheduledTask -TaskName "Nightly Backup" -Action (New-ScheduledTaskAction -Execute 'C:\Scripts\backup.cmd') -Trigger (New-ScheduledTaskTrigger -Daily -At 2am) -User SYSTEM
+New-NetFirewallRule -DisplayName "Allow SQL" -Direction Inbound -LocalPort 1433 -Protocol TCP -Action Allow
+Add-ADGroupMember -Identity "HR-Readers" -Members jdoe
+New-LocalUser -Name svc_backup -Password (ConvertTo-SecureString "Temp-Pass-123" -AsPlainText -Force) -PasswordNeverExpires
+Get-EventLog -LogName System -Newest 50
+Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4625} -MaxEvents 20
+Restart-Service Spooler
+Stop-Service -Name MSSQLSERVER; Start-Service -Name MSSQLSERVER
+Compress-Archive -Path C:\Logs\* -DestinationPath C:\Temp\logs.zip -Force
+Get-Mailbox -ResultSize Unlimited | Get-MailboxStatistics | Sort-Object TotalItemSize -Descending
+Copy-Item \\fileserver\deploy\app.msi C:\Temp\
+net use Z: \\fileserver\share /persistent:yes
+Get-ChildItem -Path C:\Logs -Include *.log -Recurse | Where-Object LastWriteTime -lt (Get-Date).AddDays(-30) | Remove-Item
+Invoke-Command -ComputerName SRV01 -ScriptBlock { Get-Service W32Time }
+Get-Content .\servers.txt | ForEach-Object { Invoke-Command -ComputerName $_ -ScriptBlock { Get-HotFix } }
+Get-MpComputerStatus | Select-Object AMServiceEnabled, RealTimeProtectionEnabled
+Update-MpSignature; Start-MpScan -ScanType QuickScan
+Set-MpPreference -SignatureUpdateInterval 4
+Set-MpPreference -DisableRealtimeMonitoring $false
+certutil -hashfile C:\Temp\setup.exe SHA256
+reg query HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall /s
+reg export HKCU\Software\Contoso C:\Backup\contoso.reg /y
+Get-ADComputer -Filter * -Properties LastLogonDate | Where-Object LastLogonDate -lt (Get-Date).AddDays(-90) | Export-Csv stale.csv
+whoami /groups
+schtasks /query /fo LIST /v
+Get-ScheduledTask | Where-Object State -eq Ready
+Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -Value 0
+Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name WallPaper -Value 'C:\Windows\Web\Wallpaper\contoso.jpg'
+New-Item -Path HKLM:\SOFTWARE\Contoso -Force; New-ItemProperty -Path HKLM:\SOFTWARE\Contoso -Name Version -Value '1.2.0' -PropertyType String -Force
+Rename-Computer -NewName WS-0142 -Restart
+Add-Computer -DomainName contoso.local -Credential $cred -Restart
+Clear-RecycleBin -Force
+Remove-Item "$env:TEMP\*" -Recurse -Force -ErrorAction SilentlyContinue
+Get-Content C:\logs\app.log -Tail 100
+Select-String -Path C:\inetpub\logs\LogFiles\W3SVC1\*.log -Pattern " 500 "
+Expand-Archive -Path C:\Temp\tools.zip -DestinationPath C:\Tools -Force
+Get-FileHash C:\Temp\setup.exe -Algorithm SHA256
+& "C:\Program Files\7-Zip\7z.exe" a C:\Backup\logs.7z C:\Logs\*
+Start-Process "C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE"
+& "$env:ProgramFiles\Contoso\agent.exe" --register --tenant contoso
+Start-Process "$env:TEMP\ChromeSetup.exe" -ArgumentList '/silent /install' -Wait
+if (Test-Path "C:\Program Files\Contoso\app.exe") { Write-Output "Installed"; exit 0 } else { exit 1 }
+Connect-ExchangeOnline -UserPrincipalName admin@contoso.com -ShowBanner:$false
+Connect-MgGraph -Scopes "User.Read.All"; Get-MgUser -All | Select-Object DisplayName, Mail
+Get-AzVM | Select-Object Name, ResourceGroupName, Location
+Get-SmbShare; Get-SmbSession
+Restart-Computer -ComputerName srv03 -Force
+Get-NetTCPConnection -State Listen | Sort-Object LocalPort
+ipconfig /flushdns
+nslookup contoso.com
+Resolve-DnsName contoso.com -Type MX
+Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 5
+Install-WindowsFeature RSAT-AD-PowerShell
+icacls C:\Data /grant "CONTOSO\HR:(OI)(CI)M"
+Get-BitLockerVolume; Enable-BitLocker -MountPoint C: -EncryptionMethod XtsAes256 -RecoveryPasswordProtector
+manage-bde -status
+wevtutil qe System /c:20 /rd:true /f:text
+wevtutil el
+auditpol /get /category:*
+Set-Service -Name Spooler -StartupType Disabled
+Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart
+Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force
+gpupdate /force
+gpresult /r
+Add-Printer -ConnectionName \\printsrv\HP-Floor2
+Send-MailMessage -From reports@contoso.com -To it@contoso.com -Subject "Disk report" -Body $body -Attachments C:\Reports\disk.csv -SmtpServer smtp.contoso.com
+Invoke-RestMethod -Uri https://api.contoso.com/v1/status -Headers @{Authorization = "Bearer $token"}
+Invoke-RestMethod -Method Post -Uri https://hooks.slack.com/services/T000/B000/XXXX -Body (ConvertTo-Json @{text = "Backup done"}) -ContentType 'application/json'
+Copy-Item C:\Users\jdoe\Documents\*.docx \\fileserver\home\jdoe\ -Recurse
+$cred = Get-Credential
+powershell -Command "Get-Date"
+ping -n 4 8.8.8.8
+Test-Connection -ComputerName dc01, dc02 -Count 1
+[System.IO.Compression.ZipFile]::CreateFromDirectory("C:\Logs", "C:\Temp\logs.zip")
+$bytes = [Convert]::FromBase64String($certB64); [IO.File]::WriteAllBytes("C:\certs\intermediate.cer", $bytes)
+Enable-PSRemoting -Force
+Set-Item WSMan:\localhost\Client\TrustedHosts -Value "srv01.contoso.local" -Force
+New-Service -Name "ContosoAgent" -BinaryPathName "C:\Program Files\Contoso\agent.exe" -StartupType Automatic
+Stop-Process -Name chrome -Force
+taskkill /im notepad.exe /f
+Get-WmiObject -Namespace root\SecurityCenter2 -Class AntiVirusProduct
+Get-LocalGroupMember -Group Administrators
+net localgroup administrators
+Get-Clipboard
+Start-Transcript -Path C:\Logs\session.txt -Append
+Write-EventLog -LogName Application -Source ContosoApp -EventId 1000 -Message "Deployment finished"
+Get-Acl C:\Data | Format-List
+Get-ADUser jdoe -Properties MemberOf | Select-Object -ExpandProperty MemberOf
+Set-ADUser jdoe -Title "Engineer" -Department "IT"
+Unlock-ADAccount -Identity jdoe
+Search-ADAccount -LockedOut | Unlock-ADAccount
+Get-DnsServerZone -ComputerName dc01
+Get-DhcpServerv4Scope -ComputerName dhcp01
+Get-VM | Where-Object State -eq Running | Stop-VM -Force
+Get-Disk | Where-Object PartitionStyle -eq RAW | Initialize-Disk -PartitionStyle GPT
+Get-PhysicalDisk | Select-Object FriendlyName, HealthStatus
+Get-Volume | Select-Object DriveLetter, FileSystemLabel, SizeRemaining
+Get-ItemProperty HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\* | Select-Object DisplayName, DisplayVersion
+Get-AppxPackage *xbox* | Remove-AppxPackage
+Get-NetAdapter | Where-Object Status -eq Up
+Set-DnsClientServerAddress -InterfaceAlias Ethernet -ServerAddresses 10.0.0.10, 10.0.0.11
+Get-LocalUser | Where-Object Enabled
+Get-Counter '\Processor(_Total)\% Processor Time' -SampleInterval 2 -MaxSamples 5
+Measure-Command { Get-ChildItem C:\Windows -Recurse -ErrorAction SilentlyContinue }
+Get-PSDrive -PSProvider FileSystem
+Import-Csv .\newusers.csv | ForEach-Object { New-ADUser -Name $_.Name -SamAccountName $_.Sam -Enabled $true -AccountPassword (ConvertTo-SecureString $_.Pass -AsPlainText -Force) }
+Get-Printer | Where-Object Shared
+Get-Command -Module ActiveDirectory
+Update-Help -Force -ErrorAction SilentlyContinue
+$PSVersionTable
+Get-ExecutionPolicy -List
+ENC: Get-WmiObject Win32_OperatingSystem | Select-Object Caption, Version
+ENC: $p = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\SMS\Mobile Client'; Write-Output $p.ProductVersion
+ENC: if (Get-Service -Name CcmExec -ErrorAction SilentlyContinue) { 'Compliant' } else { 'NonCompliant' }
+ENC: Get-ChildItem 'C:\Windows\ccmcache' | Measure-Object -Property Length -Sum

@@ -1,0 +1,1680 @@
+# PowerDetect rules
+# =================
+# Matched case-insensitively against EVERY deobfuscated layer (or, with
+# target = "flags", against the parsed powershell.exe flags). Each rule counts
+# once per command.
+#
+# Rule fields
+#   id, name      unique id + short title
+#   tactic        ATT&CK tactic key from [tactics]
+#   mitre         ATT&CK technique id(s)
+#   weight        score contribution
+#   pattern       regex (TOML literal string; write a single quote as \x27)
+#   requires      optional list of regexes that must ALSO match somewhere in the script
+#   exclude       optional regex; if it matches the script the rule does not fire
+#   min_verdict   optional floor: a critical indicator forces at least this verdict
+#   tags          capabilities used by [[combo]] rules
+#   why           plain-language reason shown to the analyst
+#   fp            known legitimate uses (shown as a false-positive note)
+#
+# Verdict = max(score threshold, highest min_verdict among hits).
+# Tags: download execute inmemory c2 exfil evasion persistence privesc credential
+#       injection lateral impact recon collection obfuscation stealthy-launch decode payload
+
+[thresholds]
+suspicious = 30
+malicious = 70
+
+# ATT&CK tactics, in kill-chain order (used for grouping and the kill-chain bonus)
+[tactics]
+reconnaissance = "Reconnaissance"
+initial-access = "Initial Access"
+execution = "Execution"
+persistence = "Persistence"
+privilege-escalation = "Privilege Escalation"
+defense-impairment = "Defense Impairment"
+stealth = "Stealth"
+credential-access = "Credential Access"
+discovery = "Discovery"
+lateral-movement = "Lateral Movement"
+collection = "Collection"
+command-and-control = "Command and Control"
+exfiltration = "Exfiltration"
+impact = "Impact"
+
+[killchain]
+min_tactics = 3     # attack tactics (discovery/recon excluded)
+weight = 15
+step = 10           # extra per additional tactic
+why = "Real intrusions chain several stages (e.g. execute, evade, persist, call home). Normal admin commands rarely touch three or more attack tactics at once."
+
+# Obfuscation techniques found while deobfuscating (keys match deobfuscate.py)
+[obfuscation.tick-obfuscation]
+name = "Backtick obfuscation"
+weight = 10
+why = "Backticks inside keywords (I`E`X) do nothing for a normal script; they exist to break signature matching."
+
+[obfuscation.string-concatenation]
+name = "String concatenation"
+weight = 5
+why = "Keywords or URLs assembled from fragments ('Ne'+'t.WebClient') to hide them from simple string searches."
+
+[obfuscation.format-operator]
+name = "Format-operator reordering"
+weight = 15
+why = "Strings rebuilt with -f and shuffled indexes are an Invoke-Obfuscation hallmark; admins essentially never write code this way."
+
+[obfuscation.char-codes]
+name = "Character-code encoding"
+weight = 15
+why = "Text written as [char] numbers hides keywords and URLs from inspection."
+
+[obfuscation.string-replace]
+name = "Replace-based obfuscation"
+weight = 10
+why = "Junk characters inserted into strings and removed at run time with .Replace/-replace."
+
+[obfuscation.string-reversal]
+name = "String reversal"
+weight = 20
+why = "Commands stored backwards and reversed at run time - a deliberate evasion trick."
+
+[obfuscation.base64-payload]
+name = "Embedded base64 payload"
+weight = 10
+why = "Code carried as base64 inside the script and decoded at run time, hiding the real payload."
+
+[obfuscation.compressed-payload]
+name = "Compressed embedded payload"
+weight = 20
+why = "Base64 + Gzip/Deflate payloads are the standard packaging of Cobalt Strike, Empire and Metasploit PowerShell stagers."
+
+[obfuscation.nested-encoded-command]
+name = "Nested encoded PowerShell"
+weight = 25
+why = "An encoded command that launches another encoded PowerShell: layers of wrapping only make sense when hiding something."
+
+[obfuscation.base64-blob]
+name = "Base64 blob"
+weight = 5
+why = "A long base64 string that decodes to readable data."
+
+[obfuscation.max-depth-reached]
+name = "Excessive encoding depth"
+weight = 30
+min_verdict = "SUSPICIOUS"
+why = "More than six nested encoding layers. No legitimate tool does this."
+
+# =====================================================================
+# HOST FLAGS (target = "flags")
+# =====================================================================
+[[rule]]
+id = "PD-H001"
+name = "Encoded command (-EncodedCommand)"
+tactic = "stealth"
+mitre = "T1027.010"
+weight = 10
+target = "flags"
+pattern = 'encodedcommand'
+tags = ["stealthy-launch"]
+why = "The script was passed base64-encoded, which hides it from casual inspection and simple command-line searches."
+fp = "SCCM/ConfigMgr, Intune and many RMM agents launch encoded commands; judge the decoded content, not the flag."
+
+[[rule]]
+id = "PD-H002"
+name = "Hidden window"
+tactic = "stealth"
+mitre = "T1564.003"
+weight = 10
+target = "flags"
+pattern = 'windowstyle=(hidden|h|hid|hidd|hidde|1)\b'
+tags = ["stealthy-launch"]
+why = "PowerShell was started with no visible window, so the logged-on user cannot see it running."
+fp = "Management agents and scheduled maintenance scripts commonly run hidden."
+
+[[rule]]
+id = "PD-H003"
+name = "Execution policy bypass"
+tactic = "stealth"
+mitre = "T1059.001"
+weight = 5
+target = "flags"
+pattern = 'executionpolicy=(bypass|unrestricted|b|u|by|byp|bypa|bypas)\b'
+why = "Skips the execution policy. Weak on its own: the policy is not a security boundary and admins bypass it routinely."
+fp = "Very common in legitimate deployment scripts."
+
+[[rule]]
+id = "PD-H004"
+name = "PowerShell v2 downgrade"
+tactic = "defense-impairment"
+mitre = "T1562.010"
+weight = 40
+target = "flags"
+pattern = 'version=2'
+min_verdict = "SUSPICIOUS"
+tags = ["evasion"]
+why = "PowerShell 2.0 has no AMSI, no script-block logging and no constrained language mode. Attackers downgrade to blind the defences."
+fp = "Very old line-of-business scripts that only run on v2."
+
+[[rule]]
+id = "PD-H005"
+name = "Launched through cmd.exe"
+tactic = "execution"
+mitre = "T1059.003"
+weight = 5
+target = "flags"
+pattern = 'cmd_wrapper'
+why = "PowerShell was started via cmd.exe /c. Common for macros and LNK droppers (often with ^ escapes to break up keywords), but also for many legitimate launchers."
+fp = "Batch-file based deployment and login scripts."
+
+# =====================================================================
+# EXECUTION
+# =====================================================================
+[[rule]]
+id = "PD-E001"
+name = "Invoke-Expression (runs a string as code)"
+tactic = "execution"
+mitre = "T1059.001"
+weight = 20
+pattern = '\b(invoke-expression|iex)\b|\|\s*iex\b|&\s*\(\s*\$\w+\s*\)|\.\s*\(\s*\$(shellid|env:comspec|pshome|verbosepreference)'
+tags = ["execute", "inmemory"]
+why = "Invoke-Expression executes text as PowerShell. It is how downloaded or decoded payloads are run without ever touching disk."
+fp = "Some installers (e.g. Chocolatey, Scoop bootstrap one-liners) use iex; verify the source."
+
+[[rule]]
+id = "PD-E002"
+name = "Script block created from a string"
+tactic = "execution"
+mitre = "T1059.001"
+weight = 15
+pattern = '\[scriptblock\]::create|newscriptblock\(|invokescript\('
+tags = ["execute", "inmemory"]
+why = "Turns arbitrary text into executable code at run time - an alternative to Invoke-Expression that dodges simple iex detections."
+
+[[rule]]
+id = "PD-E003"
+name = "Signed-binary proxy execution (LOLBin)"
+tactic = "stealth"
+mitre = "T1218"
+weight = 30
+pattern = '\bmshta(\.exe)?\s+["\x27]?(https?:|vbscript:|javascript:|about:|\\\\)|\bmshta(\.exe)?\s+\S+\.hta\b|\bregsvr32(\.exe)?\s+.*(/i:|-i:)|\brundll32(\.exe)?\s+[^\n;]*(javascript:|vbscript:|url\.dll|ieframe\.dll|shell32\.dll,\s*shellexec_rundll|advpack\.dll|setupapi\.dll|zipfldr\.dll|pcwutl\.dll|\.(txt|png|jpg|dat|tmp|log|bin),)|\b(installutil|regasm|regsvcs)(\.exe)?\s+.*(/u\b|/logfile=|\.dll)|\bmsbuild(\.exe)?\s+\S+\.(xml|csproj|proj|txt)\b|\bcmstp(\.exe)?\s+.*/(s|ni|au)\b|\bodbcconf(\.exe)?\s+.*(/a|-a|/f)\b|\bmavinject(\.exe)?\b|\bmsxsl(\.exe)?\b|\bpcalua(\.exe)?\s+-a\b|syncappvpublishingserver|\bieexec(\.exe)?\b|\binfdefaultinstall(\.exe)?\b|\bpresentationhost(\.exe)?\b|\bxwizard(\.exe)?\s+runwizard|register-cimprovider|\bhh(\.exe)?\s+\S+\.chm|\bcontrol(\.exe)?\s+\S+\.cpl|\bmsiexec(\.exe)?\s+[^\n;]*(/i\s*["\x27]?https?:|/y|/z)\b|\bforfiles(\.exe)?\s+.*/c\b|\bscriptrunner(\.exe)?\s+-appvscript|\bwmic(\.exe)?\s+[^\n;]*/format:|\bmsdt(\.exe)?\s+.*(/af|-af|ms-msdt)|\bcertoc(\.exe)?\s+-loaddll|\bdiskshadow(\.exe)?\s+/s\b|\bbash(\.exe)?\s+-c\b|\bwsl(\.exe)?\s+-e\b|\bcdb(\.exe)?\s+-cf\b|\bnetsh(\.exe)?\s+add\s+helper|\bjsc(\.exe)?\s+\S+\.js|\bcsc(\.exe)?\s+.*\.cs\b|\bwuauclt(\.exe)?\s+.*/runhandlercomserver|\bdesktopimgdownldr|\bverclsid(\.exe)?\s+/s|\bconhost(\.exe)?\s+--headless|\bftp(\.exe)?\s+-s:'
+tags = ["execute"]
+why = "A Microsoft-signed system binary is used to run attacker code. Application allow-listing and some EDRs trust these binaries, which is exactly why attackers proxy through them."
+fp = "Some of these binaries have niche legitimate uses (e.g. msbuild by developers, control.exe for real applets)."
+
+[[rule]]
+id = "PD-E004"
+name = "Process created via WMI/CIM"
+tactic = "execution"
+mitre = "T1047"
+weight = 25
+pattern = '(invoke-wmimethod|invoke-cimmethod)\s+[^\n;]*win32_process[^\n;]*create|\[wmiclass\][^\n;]*win32_process|win32_process\b[^\n;]*\.create\(|\bwmic(\.exe)?\s+[^\n;]*process\s+call\s+create|win32_product[^\n;]*(install|-methodname\s+install)'
+tags = ["execute"]
+why = "Starting processes through WMI breaks the normal parent/child process chain (the child appears under WmiPrvSE.exe), hiding where it came from."
+fp = "Some remote-management scripts start processes through WMI."
+
+[[rule]]
+id = "PD-E005"
+name = "Execution through COM objects"
+tactic = "execution"
+mitre = "T1559.001"
+weight = 25
+pattern = 'shell\.application[\s\S]{0,200}shellexecute|wscript\.shell[\s\S]{0,200}\.(run|exec)\(|mmc20\.application|shellbrowserwindow|shellwindows|c08afd90-f2a1-11d1-8455-00a0c91f3880|9ba05972-f6a8-11cf-a442-00a0c90a8f39|49b2791a-b1ae-4c90-9b8e-e860ba07f889|\.document\.activeview\.executeshellcommand|gettypefromclsid[\s\S]{0,200}(shellexecute|executeshellcommand|\.navigate)|\.activatemicrosoftapp\(|excel\.application[\s\S]{0,300}(registerxll|ddeinitiate|executeexcel4macro)|outlook\.application[\s\S]{0,300}createobject\('
+tags = ["execute"]
+why = "COM objects such as Shell.Application, WScript.Shell or MMC20 launch processes on the attacker's behalf, again hiding the true parent process."
+
+[[rule]]
+id = "PD-E006"
+name = "Runs a program from a user-writable folder"
+tactic = "execution"
+mitre = "T1204.002"
+weight = 15
+pattern = '(start-process|saps|start|&|invoke-item|cmd(\.exe)?\s+/c|\.\\)\s*(-filepath\s+)?["\x27(]*\s*(\$env:(temp|tmp|appdata|localappdata|public|allusersprofile|programdata)|%(temp|tmp|appdata|localappdata|public|allusersprofile|programdata)%|c:\\users\\public|c:\\programdata|c:\\windows\\temp|c:\\perflogs|c:\\temp)[^\s;|]*\.(exe|dll|bat|cmd|vbs|vbe|js|jse|hta|scr|pif|com|ps1|msi|lnk)\b'
+tags = ["execute", "payload"]
+why = "Malware is usually dropped to Temp, AppData, Public or ProgramData and started from there - those folders are writable without admin rights."
+fp = "Installers downloaded to %TEMP% and run silently by admins."
+
+[[rule]]
+id = "PD-E007"
+name = "Runs code from a remote share or WebDAV"
+tactic = "execution"
+mitre = "T1218"
+weight = 25
+pattern = '\\\\[\w.-]+@ssl\\|\\\\[\w.-]+\\davwwwroot\\|\\\\\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(@\d+)?\\[^\s]*\.(exe|dll|ps1|bat|hta|js|vbs)'
+tags = ["execute", "download"]
+why = "Executing straight from a WebDAV share or a raw-IP UNC path pulls a payload from attacker infrastructure without a classic download."
+
+[[rule]]
+id = "PD-E008"
+name = "Named pipe server"
+tactic = "execution"
+mitre = "T1559"
+weight = 15
+pattern = 'namedpipeserverstream'
+tags = ["c2"]
+why = "Named pipes are used for local C2 channels and for token impersonation (potato-style privilege escalation)."
+fp = "Some line-of-business IPC code."
+
+[[rule]]
+id = "PD-E010"
+name = "Executes clipboard content / fake CAPTCHA lure (ClickFix)"
+tactic = "execution"
+mitre = "T1204.004, T1115"
+weight = 40
+min_verdict = "SUSPICIOUS"
+pattern = 'get-clipboard[^\n]*\|\s*(iex|invoke-expression)|(iex|invoke-expression)\s*\(?\s*get-clipboard|clipboard\]::gettext\(\)[^\n]*(iex|invoke-expression)|#\s*[^\n]{0,40}(i am not a robot|i\x27m not a robot|not a robot|verify you are human|human verification|captcha|recaptcha|cloudflare verification|verification (id|code|step)|press enter to verify)'
+tags = ["execute", "inmemory"]
+why = "'ClickFix' lures tell users to paste a command into Run/PowerShell (often hidden behind a fake CAPTCHA comment); code taken from the clipboard and executed is attacker-supplied."
+
+[[rule]]
+id = "PD-E009"
+name = "PowerShell launched with an encoded/hidden child PowerShell"
+tactic = "execution"
+mitre = "T1059.001"
+weight = 20
+pattern = '(powershell|pwsh)(\.exe)?["\x27]?\s+[^\n;|]*(-e(nc|nco|ncodedcommand)?\s+([a-z0-9+/=]{20,}|\$\w+)|-w(indowstyle)?\s+h(idden)?\b)'
+tags = ["stealthy-launch", "execute"]
+why = "A script that starts another PowerShell hidden or with an encoded command is staging its next step out of sight."
+
+# =====================================================================
+# DOWNLOAD / COMMAND AND CONTROL
+# =====================================================================
+[[rule]]
+id = "PD-D001"
+name = "Download cradle (WebClient)"
+tactic = "command-and-control"
+mitre = "T1105"
+weight = 30
+pattern = 'net\.webclient|\.download(string|data|file)(async)?\s*\('
+tags = ["download"]
+why = "System.Net.WebClient is the classic way PowerShell malware pulls its next stage from the internet."
+fp = "Older admin scripts that download files with WebClient."
+
+[[rule]]
+id = "PD-D002"
+name = "Web request to a URL"
+tactic = "command-and-control"
+mitre = "T1105"
+weight = 15
+pattern = '\b(invoke-webrequest|iwr|invoke-restmethod|irm|wget|curl)\b\s+[^\n;]*(https?://|\$\w*url)'
+tags = ["download"]
+why = "Fetches content from the network. Neutral on its own; dangerous when combined with execution or obfuscation."
+fp = "REST API calls and installer downloads by admins."
+
+[[rule]]
+id = "PD-D003"
+name = "BITS / XMLHTTP / WinHTTP / HttpClient transfer"
+tactic = "command-and-control"
+mitre = "T1197"
+weight = 20
+pattern = 'start-bitstransfer|bitsadmin(\.exe)?\s+[^\n;]*/(transfer|addfile|download)|msxml2\.(server)?xmlhttp|winhttp\.winhttprequest|net\.http\.httpclient|system\.net\.webrequest|\[net\.webrequest\]::create|net\.sockets\.tcpclient[\s\S]{0,300}\.read\('
+tags = ["download"]
+why = "Alternative download APIs, often chosen to avoid WebClient/Invoke-WebRequest detections. BITS transfers also survive reboots."
+fp = "Software distribution tools use BITS legitimately."
+
+[[rule]]
+id = "PD-D004"
+name = "Download executed directly in memory"
+tactic = "execution"
+mitre = "T1059.001"
+weight = 35
+min_verdict = "MALICIOUS"
+pattern = '(downloadstring|downloaddata|invoke-webrequest|iwr|invoke-restmethod|irm|\.content\b|\.responsetext)\b[^\n]{0,200}\|\s*(iex|invoke-expression)\b|\b(iex|invoke-expression)\b[^\n]{0,80}(downloadstring|downloaddata|\biwr\b|\birm\b|invoke-restmethod|invoke-webrequest|\.responsetext)|\[scriptblock\]::create\([^\n]{0,80}(downloadstring|iwr|irm|invoke-webrequest|invoke-restmethod)|assembly\]::load\([^\n]{0,120}(downloaddata|invoke-webrequest|iwr)'
+tags = ["download", "execute", "inmemory"]
+why = "Remote code is fetched and executed in one step without being written to disk - the defining pattern of a PowerShell stager / fileless malware."
+fp = "Vendor bootstrap one-liners (Chocolatey, Scoop, some RMM installers) use the same technique; confirm the URL is the vendor's."
+
+[[rule]]
+id = "PD-D005"
+name = "Raw IP, paste site, file-drop or tunnel URL"
+tactic = "command-and-control"
+mitre = "T1105"
+weight = 15
+pattern = 'https?://(\d{1,3}\.){3}\d{1,3}|pastebin\.com|paste\.ee|hastebin|ghostbin|transfer\.sh|temp\.sh|file\.io|0x0\.st|anonfiles|gofile\.io|ngrok(-free)?\.(io|app|dev)|trycloudflare\.com|serveo\.net|localhost\.run|raw\.githubusercontent\.com|gist\.githubusercontent\.com|cdn\.discordapp\.com|discord(app)?\.com/api/webhooks|api\.telegram\.org|\.onion\b|duckdns\.org|no-ip\.|ddns\.net'
+tags = ["c2"]
+why = "Legitimate software is rarely hosted on bare IP addresses, paste sites, anonymous file drops or tunnelling services - attackers use them because they are free and disposable."
+fp = "GitHub raw links for genuine open-source scripts."
+
+[[rule]]
+id = "PD-D006"
+name = "certutil used to download or decode"
+tactic = "command-and-control"
+mitre = "T1105, T1140"
+weight = 40
+min_verdict = "SUSPICIOUS"
+pattern = '\bcertutil(\.exe)?\s+[^\n;]*(-urlcache|/urlcache|-verifyctl|-decode|-decodehex|-encode|-split\s+-f|-ping)\b'
+tags = ["download", "decode"]
+why = "certutil is a certificate tool; using it to fetch URLs or base64-decode files is a well-known LOLBin trick to smuggle payloads past controls."
+
+[[rule]]
+id = "PD-D007"
+name = "Other living-off-the-land downloaders"
+tactic = "command-and-control"
+mitre = "T1105"
+weight = 20
+pattern = '\b(curl|wget)\.exe\s+[^\n;]*https?://|\bscp(\.exe)?\s+\S+@\S+:|\bsftp(\.exe)?\s+\S+@|\btftp(\.exe)?\s+-i\b|\bexpand(\.exe)?\s+\\\\|\besentutl(\.exe)?\s+[^\n;]*/y\s+\\\\|\bmpcmdrun(\.exe)?\s+[^\n;]*-downloadfile|\bfinger(\.exe)?\s+\S+@\S+|\bprinthtml|\bconfiguresecuritypolicy\.exe|\bmsedge(\.exe)?\s+--headless.*--dump-dom|\bcmdl32(\.exe)?\s+/vpn|\bimewdbld(\.exe)?\s+https?:|\bcertreq(\.exe)?\s+-post|\bxcopy(\.exe)?\s+\\\\\d|\bimewdbld\b|\bsqlcmd(\.exe)?\s+[^\n]*-i\s+["\x27]?https?:|\bappinstaller(\.exe)?\s+["\x27]?ms-appinstaller:|\bwinget(\.exe)?\s+install\s+[^\n]*--manifest\s+https?:'
+tags = ["download"]
+why = "Windows built-ins (curl, scp, tftp, esentutl, MpCmdRun, finger ...) can fetch files and are abused to avoid PowerShell download detections."
+fp = "curl.exe/scp usage by IT staff."
+
+[[rule]]
+id = "PD-D008"
+name = "Remote-access or tunnelling tool"
+tactic = "command-and-control"
+mitre = "T1219, T1572"
+weight = 30
+pattern = '\b(ngrok|anydesk|rustdesk|screenconnect|connectwise\.?control|atera|splashtop|ammyy|netsupport|client32\.exe|meshagent|tightvnc|ultravnc|winvnc|radmin|remcos|quasar|chisel|frpc|cloudflared|plink(\.exe)?|psiphon|tor\.exe|socat|ncat|nc\.exe|nc64\.exe|netcat|ligolo|revsocks|gost\.exe|iodine|dnscat|msp360|level\.io|teamviewer\w*|logmein\w*|lmiignition|gotoassist|g2ax\w*|remoteutilities|rutserv|supremo\w*|dwagent|dwservice|bomgar|beyondtrust remote|simplehelp|aeroadmin|zohoassist|zoho assist|getscreen|tacticalrmm|remotepc|showmypc|islonline|parsecd?|pulseway|action1)\b'
+tags = ["c2"]
+why = "Remote-access and tunnelling tools give an attacker interactive, firewall-friendly access that blends in with IT tooling."
+fp = "Your organisation's sanctioned remote-support tool (TeamViewer, AnyDesk ...)."
+
+[[rule]]
+id = "PD-D009"
+name = "Downloads a high-risk file type"
+tactic = "initial-access"
+mitre = "T1105, T1566"
+weight = 20
+pattern = '(-outfile|downloadfile\([^\n]*,|-destination)\s*["\x27(]?[^\n;|]*\.(xlsm|xlsb|docm|dotm|pptm|xll|hta|lnk|iso|img|vhdx?|js|jse|vbs|vbe|wsf|scr|pif|cpl|chm|one|appx|msix|appinstaller|library-ms|searchconnector-ms)\b'
+tags = ["download", "payload"]
+why = "Macro documents, HTA, LNK, ISO/IMG and script files are the standard initial-access payload formats; admins rarely download them with PowerShell."
+
+[[rule]]
+id = "PD-D010"
+name = "Spreads to removable drives"
+tactic = "initial-access"
+mitre = "T1091"
+weight = 30
+pattern = '(drivetype\s*=\s*["\x27]?2\b|drivetype\s+-eq\s+["\x27]?(2|removable))[\s\S]{0,400}(copy-item|new-item|set-content|\bcopy\b|\.lnk|autorun\.inf)'
+tags = ["lateral", "payload"]
+why = "Enumerating removable drives and writing files to them is how USB worms (Raspberry Robin, PlugX variants) spread."
+
+[[rule]]
+id = "PD-N001"
+name = "TCP stream read/executed (reverse shell)"
+tactic = "command-and-control"
+mitre = "T1095, T1059.001"
+weight = 50
+min_verdict = "MALICIOUS"
+pattern = 'net\.sockets\.tcpclient[\s\S]{0,400}getstream|getstream\(\)[\s\S]{0,400}(iex|invoke-expression|out-string)|net\.sockets\.tcplistener[\s\S]{0,400}(iex|invoke-expression)'
+tags = ["c2", "execute"]
+why = "A raw TCP connection whose data is executed and answered - an interactive reverse/bind shell giving the attacker a live prompt."
+
+[[rule]]
+id = "PD-N002"
+name = "Raw socket or listener"
+tactic = "command-and-control"
+mitre = "T1095"
+weight = 15
+pattern = 'net\.sockets\.(tcpclient|tcplistener|udpclient|socket)|net\.httplistener'
+tags = ["c2"]
+why = "Opens a raw network channel outside normal web traffic."
+fp = "Port-check and monitoring scripts."
+
+[[rule]]
+id = "PD-N003"
+name = "DNS-based C2 or tunnelling"
+tactic = "command-and-control"
+mitre = "T1071.004"
+weight = 25
+pattern = 'resolve-dnsname\s+[^\n]*-type\s+["\x27]?txt|nslookup\s+[^\n]*-q(uerytype)?=txt|resolve-dnsname[^\n]*\$\(|resolve-dnsname\s+(-name\s+)?["\x27]?\$\w+\.|nslookup(\.exe)?\s+["\x27]?\$\w+\.|/dns-query\?|/resolve\?name=|dnscat|iodine|invoke-dnsexfiltrator|dnsexfil'
+tags = ["c2"]
+why = "TXT lookups, DNS-over-HTTPS queries or generated sub-domains can carry commands and data inside DNS, which most firewalls let through."
+
+[[rule]]
+id = "PD-N004"
+name = "Port forwarding / proxy set up"
+tactic = "command-and-control"
+mitre = "T1090"
+weight = 30
+pattern = 'netsh(\.exe)?\s+interface\s+portproxy\s+add|netsh(\.exe)?\s+winhttp\s+set\s+proxy|socks(4|5)\b|ssh(\.exe)?\s+[^\n;]*-(r|d|l)\s+\d'
+tags = ["c2"]
+why = "Port proxies and SSH tunnels let an attacker pivot through this host to reach internal systems."
+
+[[rule]]
+id = "PD-N005"
+name = "Data sent out (exfiltration)"
+tactic = "exfiltration"
+mitre = "T1041, T1048"
+weight = 30
+pattern = 'send-mailmessage\s+[^\n]*-attachments?\s+[^\n]*\\(windows|users\\[^\\]+\\(documents|desktop|appdata))|\.send\([^\n]{0,60}\$(data|bytes|chunk)|-method\s+["\x27]?(put|post)["\x27]?\s+[^\n]*(-infile|get-content|\[convert\]::tobase64string|-body\s+\(?\s*\[io\.file\])|\.upload(file|data|string)(async)?\s*\(|\bmegacmd|\bmega-put|net\.networkinformation\.ping[\s\S]{0,300}\.send\(|ftp(\.exe)?\s+[^\n]*\bput\b'
+tags = ["exfil"]
+why = "Files or encoded data are pushed to an external destination (HTTP POST/PUT, mail attachments, ICMP, rclone, cloud storage)."
+fp = "Scripts that upload reports or logs to an internal API."
+
+[[rule]]
+id = "PD-N007"
+name = "Uploads local file content over HTTP"
+tactic = "exfiltration"
+mitre = "T1041, T1567"
+weight = 25
+pattern = '(invoke-webrequest|invoke-restmethod|\biwr\b|\birm\b)\s+[^\n]*-method\s+["\x27]?(post|put)|(invoke-webrequest|invoke-restmethod|\biwr\b|\birm\b)\s+[^\n]*-infile\b'
+requires = ['(get-content|readallbytes|readalltext|openread|tobase64string|compress-archive)']
+tags = ["exfil"]
+why = "Reads local file content and POSTs/PUTs it to a web endpoint - how data (or stolen secrets) is pushed out over HTTPS."
+fp = "Scripts that upload logs or reports to an internal API."
+
+[[rule]]
+id = "PD-N008"
+name = "Cloud-sync tool used for bulk transfer"
+tactic = "exfiltration"
+mitre = "T1567.002"
+weight = 35
+min_verdict = "SUSPICIOUS"
+pattern = '\brclone(\.exe)?\b|\bmegacmd|\bmega-(put|cmd|login)|\bmegasync|\brestic(\.exe)?\s+[^\n]*backup|\bfilezilla\w*\s+[^\n]*sftp://|\bwinscp(\.com|\.exe)?\s+[^\n]*/command[^\n]*put'
+tags = ["exfil"]
+why = "rclone/MEGA and scripted SFTP uploads are the most common tools ransomware groups use to steal data before encryption."
+fp = "Sanctioned backup jobs using rclone or restic."
+
+[[rule]]
+id = "PD-N006"
+name = "Network stack tampering for covert traffic"
+tactic = "command-and-control"
+mitre = "T1205.002"
+weight = 30
+pattern = 'tcpip\\parameters[^\n]*(maxrawsockets|enablerawsockets)|services\\bfe\\parameters\\policy|\\afd\\parameters|winsock2\\parameters[^\n]*(autodialdll|namespace_catalog|protocol_catalog|providerorder)|netsh\s+winsock\s+(set|add)'
+tags = ["c2", "evasion"]
+why = "Changing TCP/IP, BFE or Winsock parameters enables raw sockets or hijacks name resolution - groundwork for covert channels and traffic signalling."
+
+# =====================================================================
+# DEFENSE IMPAIRMENT
+# =====================================================================
+[[rule]]
+id = "PD-V001"
+name = "AMSI bypass"
+tactic = "defense-impairment"
+mitre = "T1562.001"
+weight = 60
+min_verdict = "MALICIOUS"
+pattern = 'amsiutils|amsiinitfailed|amsiscanbuffer|amsiopensession|amsicontext|amsi\.dll|\\amsi\\providers|amsienable\s*=\s*0'
+tags = ["evasion"]
+why = "AMSI lets Defender inspect script content at run time. Disabling or patching it is only done to run code that would otherwise be caught."
+
+[[rule]]
+id = "PD-V002"
+name = "Microsoft Defender disabled or weakened"
+tactic = "defense-impairment"
+mitre = "T1562.001"
+weight = 50
+min_verdict = "MALICIOUS"
+pattern = 'set-mppreference\s+[^\n]*-disable\w+(\s+\$?(true|1))?|set-mppreference\s+[^\n]*-(drtm|dbm|dscrptsc|dbaf|dioavp|darm|dintr|drdsc|dpua|disablerealtime\w*)\s+\$?(true|1)|set-mppreference\s+[^\n]*-(puaprotection|mapsreporting|submitsamplesconsent|enablecontrolledfolderaccess|enablenetworkprotection)\s+["\x27]?(0|disabled?|never|auditmode)|disableantispyware|disableantivirus|disablerealtimemonitoring|disablebehaviormonitoring|disableioavprotection|disableonaccessprotection|disablescanonrealtimeenable|disableblockatfirstseen|tamperprotection[^\n]*(0|4)\b|uninstall-windowsfeature\s+[^\n]*windows-defender|mpcmdrun(\.exe)?\s+[^\n]*-removedefinitions|(sc|sc\.exe)\s+(stop|config|delete)\s+(windefend|wdboot|wdfilter|wdnisdrv|wdnissvc|sense)\b|(stop|set)-service\s+[^\n]*(windefend|wdnissvc|sense)\b'
+exclude = '-disable\w+\s+\$?(false|0)\b'
+tags = ["evasion"]
+why = "Turning off Defender protections (real-time monitoring, behaviour monitoring, signatures, the service itself) is a standard step right before deploying malware or ransomware."
+fp = "Rare: some backup or database vendors document disabling a single feature."
+
+[[rule]]
+id = "PD-V002B"
+name = "Defender exclusion added"
+tactic = "defense-impairment"
+mitre = "T1562.001"
+weight = 35
+min_verdict = "SUSPICIOUS"
+pattern = 'add-mppreference\s+[^\n]*-exclusion(path|process|extension|ipaddress)|set-mppreference\s+[^\n]*-exclusion(path|process|extension)|windows defender\\exclusions\\(paths|processes|extensions)'
+tags = ["evasion"]
+why = "An exclusion tells Defender to ignore a folder, process or file type - attackers add one for their staging folder so payloads are never scanned."
+fp = "Database, backup and AV-interop guidance often requires exclusions; check whether the path is expected."
+
+[[rule]]
+id = "PD-V003"
+name = "Logging or audit disabled (ETW, script-block, event channels)"
+tactic = "defense-impairment"
+mitre = "T1562.002, T1562.006"
+weight = 45
+min_verdict = "SUSPICIOUS"
+pattern = 'etweventwrite|psetwlogprovider|etwprovider[\s\S]{0,80}m_enabled|(scriptblocklogging|modulelogging|transcription)[^\n]*(enable\w+)[^\n]*(\s|=|/d\s+)0\b|enablescriptblocklogging[^\n]*\b0\b|cachedgrouppolicysettings|wevtutil(\.exe)?\s+(sl|set-log)\s+[^\n]*/e:false|auditpol(\.exe)?\s+[^\n]*/(clear|remove)|auditpol(\.exe)?\s+[^\n]*/(success|failure):disable|winevt\\channels\\[^\n]*enabled[^\n]*\b0\b|logman(\.exe)?\s+(stop|delete|update)\s+[^\n]*(eventlog-|autologger|defender|sysmon)|(stop|set)-service\s+[^\n]*\beventlog\b|sc(\.exe)?\s+(stop|config)\s+eventlog|\\autologger\\[^\n]*\bstart\b[^\n]*\b0\b|sysmon(64)?(\.exe)?\s+-u\b|fltmc(\.exe)?\s+unload|httplogging[^\n]*dontlog[:\s]*\$?true|set-webconfigurationproperty[^\n]*httplogging[^\n]*dontlog|(winevt\\channels|services\\eventlog|windows\\eventlog)[^\n]*(channelaccess|customsd)|\b(channelaccess|customsd)\b[^\n]*\(d;'
+tags = ["evasion"]
+why = "Disabling PowerShell logging, ETW, audit policy, Sysmon or event channels blinds the SOC so later activity leaves no trace."
+
+[[rule]]
+id = "PD-V004"
+name = "Event logs cleared"
+tactic = "stealth"
+mitre = "T1070.001"
+weight = 45
+min_verdict = "MALICIOUS"
+pattern = 'clear-eventlog|wevtutil(\.exe)?\s+(cl|clear-log)\b|remove-eventlog|\.clearlog\(|eventing\.reader\.eventlogsession[\s\S]{0,200}clearlog|\bfor\s+/f[^\n]*wevtutil'
+tags = ["evasion"]
+why = "Clearing event logs destroys forensic evidence; legitimate admins almost never clear Security or System logs."
+
+[[rule]]
+id = "PD-V005"
+name = "PowerShell history wiped"
+tactic = "stealth"
+mitre = "T1070.003"
+weight = 25
+pattern = 'consolehost_history|historysavepath|set-psreadlineoption\s+[^\n]*historysavestyle\s+savenothing|\bclear-history\b|set-psreadlineoption\s+[^\n]*-addtohistoryhandler'
+tags = ["evasion"]
+why = "Deleting PSReadLine history removes the record of what was typed in this and previous sessions."
+
+[[rule]]
+id = "PD-V006"
+name = "Firewall disabled"
+tactic = "defense-impairment"
+mitre = "T1562.004"
+weight = 40
+min_verdict = "SUSPICIOUS"
+pattern = 'set-netfirewallprofile\s+[^\n]*-enabled\s+["\x27]?(false|0)|netsh(\.exe)?\s+(adv)?firewall\s+set\s+[^\n]*state\s+off|netsh(\.exe)?\s+firewall\s+set\s+opmode\s+(mode=)?disable|(stop|set)-service\s+[^\n]*\bmpssvc\b|sc(\.exe)?\s+(stop|config)\s+mpssvc|(firewallpolicy|windowsfirewall)\\[^\n]*enablefirewall[^\n]*\b0\b|enablefirewall[^\n]*-value\s+0'
+tags = ["evasion"]
+why = "Turning the host firewall off exposes the machine for lateral movement and lets C2 traffic out unfiltered."
+
+[[rule]]
+id = "PD-V007"
+name = "Firewall rule opened"
+tactic = "defense-impairment"
+mitre = "T1562.004"
+weight = 10
+pattern = 'new-netfirewallrule\s+[^\n]*-action\s+["\x27]?allow|netsh(\.exe)?\s+advfirewall\s+firewall\s+add\s+rule[^\n]*action=allow|hnetcfg\.fwpolicy2|hnetcfg\.fwrule|enable-netfirewallrule|\.enablerulegroup\('
+tags = ["evasion"]
+why = "Opens an inbound or outbound path through the firewall. Weak alone; relevant with other attack activity."
+fp = "Routine for application installs (SQL, RDP, web servers)."
+
+[[rule]]
+id = "PD-V008"
+name = "UAC or Security Center protections weakened"
+tactic = "defense-impairment"
+mitre = "T1548.002, T1562.001"
+weight = 35
+min_verdict = "SUSPICIOUS"
+pattern = '\benablelua\b[^\n]*\b0\b|consentpromptbehavior(admin|user)[^\n]*\b0\b|promptonsecuredesktop[^\n]*\b0\b|localaccounttokenfilterpolicy[^\n]*\b1\b|filteradministratortoken[^\n]*\b0\b|security center[^\n]*(uinotification|antivirusdisablenotify|firewalldisablenotify|updatesdisablenotify)|windows defender\\ux configuration|notification_suppress|disablenotifications|windows defender security center\\notifications|wscsvc\b[^\n]*(stop|disabled|start[^\n]*\b4\b)|noc_global_setting|disablenotificationcenter|hidescahealth|\\traynotify\b[^\n]*(iconstreams|pasticonsstream)|(iconstreams|pasticonsstream)[^\n]*(remove-itemproperty|set-itemproperty)'
+tags = ["evasion", "privesc"]
+why = "Disabling UAC prompts, admin-token filtering or security notifications lets malware elevate silently and hides alerts from the user."
+
+[[rule]]
+id = "PD-V009"
+name = "Machine-wide execution policy weakened"
+tactic = "defense-impairment"
+mitre = "T1059.001"
+weight = 10
+pattern = 'set-executionpolicy\s+[^\n]*(bypass|unrestricted)[^\n]*-scope\s+(localmachine|currentuser)|set-executionpolicy\s+(-executionpolicy\s+)?(bypass|unrestricted)\s*$|executionpolicy[^\n]*(set-itemproperty|reg add)[^\n]*(bypass|unrestricted)'
+tags = ["evasion"]
+why = "Persistently allows unsigned scripts. Weak alone (not a security boundary) but often part of attacker setup."
+fp = "Developers and admins set this on their own machines."
+
+[[rule]]
+id = "PD-V010"
+name = "Mark-of-the-Web removed or zone trust changed"
+tactic = "defense-impairment"
+mitre = "T1553.005"
+weight = 15
+pattern = '\bunblock-file\b|zone\.identifier|zonemap\\(protocoldefaults|domains|ranges)|-stream\s+zone\.identifier|savezoneinformation[^\n]*\b1\b'
+tags = ["evasion"]
+why = "Removing Mark-of-the-Web stops SmartScreen and Office Protected View from treating downloaded files as untrusted."
+fp = "Admins unblocking their own downloaded scripts."
+
+[[rule]]
+id = "PD-V011"
+name = "Root certificate installed"
+tactic = "defense-impairment"
+mitre = "T1553.004"
+weight = 35
+min_verdict = "SUSPICIOUS"
+pattern = 'certutil(\.exe)?\s+[^\n]*-addstore\s+[^\n]*\broot\b|import-certificate\s+[^\n]*cert:\\(localmachine|currentuser)\\root|\\systemcertificates\\root\\certificates|x509store[\s\S]{0,120}["\x27]?root'
+tags = ["evasion"]
+why = "A rogue root CA lets an attacker intercept TLS traffic and makes their signed malware look trusted."
+fp = "Deploying an internal enterprise CA."
+
+[[rule]]
+id = "PD-V012"
+name = "Timestomping or clock tampering"
+tactic = "stealth"
+mitre = "T1070.006"
+weight = 30
+pattern = '\.(lastwritetime|creationtime|lastaccesstime)(utc)?\s*=|\bset-date\b|\bdate\s+\d|setfiletime|\btime\s+\d{1,2}:\d{2}'
+tags = ["evasion"]
+why = "Changing file timestamps or the system clock disguises when files were dropped and confuses timelines and log correlation."
+
+[[rule]]
+id = "PD-V013"
+name = "Files hidden with attributes"
+tactic = "stealth"
+mitre = "T1564.001"
+weight = 15
+pattern = '\battrib(\.exe)?\s+[^\n]*\+h|\battrib(\.exe)?\s+[^\n]*\+s|\.attributes\s*=\s*[^\n]*(hidden|system)|\[io\.fileattributes\]::(hidden|system)'
+tags = ["evasion"]
+why = "Sets Hidden/System attributes so dropped files do not show in Explorer or default dir listings."
+
+[[rule]]
+id = "PD-V014"
+name = "System binary copied or renamed (masquerading)"
+tactic = "stealth"
+mitre = "T1036.003"
+weight = 35
+pattern = '(copy(-item)?|cp|move(-item)?|mv|rename-item|xcopy)\s+[^\n;|]*(\\|\$env:comspec)(cmd|powershell|pwsh|rundll32|regsvr32|mshta|wscript|cscript|certutil|bitsadmin|msbuild|installutil)?(\.exe)?["\x27]?\s+[^\n;|]*(\\(svchost|taskhostw|lsass|csrss|services|winlogon|explorer|smss|spoolsv|dllhost|conhost|sihost|runtimebroker|wininit)\.exe|(\$env:|%)(temp|tmp|appdata|localappdata|public|allusersprofile|programdata)[^\n;|]*\.exe)'
+requires = ['(cmd|powershell|pwsh|rundll32|regsvr32|mshta|wscript|cscript|certutil|comspec|svchost|taskhostw|lsass)']
+tags = ["evasion"]
+why = "Copying cmd/powershell to a new name or location (e.g. svchost.exe in %TEMP%) defeats detections that key on process names."
+
+[[rule]]
+id = "PD-V015"
+name = "Invisible or bidirectional Unicode characters"
+tactic = "stealth"
+mitre = "T1036.002"
+weight = 25
+pattern = '[​-‏‪-‮⁦-⁩﻿]'
+tags = ["obfuscation"]
+why = "Zero-width and right-to-left override characters make file names, variables or commands display differently from what actually runs."
+
+[[rule]]
+id = "PD-V016"
+name = "Virtual machine / sandbox detection"
+tactic = "stealth"
+mitre = "T1497.001"
+weight = 25
+pattern = 'msacpi_thermalzonetemperature|win32_computersystem[\s\S]{0,120}(model|manufacturer)[\s\S]{0,80}(vmware|virtualbox|vbox|qemu|xen|kvm|hyper-v|virtual)|vboxservice|vboxtray|vmtoolsd|vmwaretray|sbiedll|wine_get_unix_file_name|win32_videocontroller[\s\S]{0,80}(vmware|virtualbox)|setupdigetclassdevs|isdebuggerpresent|checkremotedebuggerpresent'
+tags = ["evasion"]
+why = "Malware checks whether it runs in a VM, sandbox or debugger so it can behave innocently during analysis."
+
+[[rule]]
+id = "PD-V017"
+name = "Security product process killed"
+tactic = "defense-impairment"
+mitre = "T1562.001"
+weight = 50
+min_verdict = "MALICIOUS"
+pattern = '(stop-process|taskkill(\.exe)?|kill|pskill|wmic\s+process\s+where)[^\n]*(msmpeng|mssense|sensecncproxy|nissrv|windefend|securityhealth|csfalcon|cyserver|sentinelagent|sentinelone|cbdefense|repmgr|cylancesvc|sophos|savservice|mcshield|ccsvchst|ekrn|avp\.exe|bdservicehost|xagt|elastic-agent|sysmon)|\b(backstab|edrsilencer|edrsandblast|killav|terminator\.exe|aukill|gmer|processhacker|pchunter|blackout\.exe|realblindingedr|edrkillshifter)|(stop-service|remove-service|set-service|sc(\.exe)?\s+(stop|delete|config)|net(1)?\s+stop)\s+[^\n]*(mcafee|csagent|csfalcon|crowdstrike|sentinel|sophos|symantec|sepmaster|carbonblack|cbdefense|cylance|windefend|wdnissvc|\bsense\b|ekrn|klnagent|avp\b|bitdefender|vsserv|malwarebytes|mbamservice|trend\s*micro|ntrtscan|tmbmsrv|sysmon|elastic|xagt|cyserver|traps|cortex)|windowssensor\.exe[^\n]*/uninstall|(uninstall|remove)-package\s+[^\n]*(crowdstrike|falcon|sentinel|sophos|defender|carbon black|cylance)|advancedrun(\.exe)?[^\n]*(windefend|msmpeng|sense)'
+tags = ["evasion"]
+why = "Terminating antivirus/EDR processes (often with vulnerable-driver 'EDR killers') removes protection entirely - a hallmark of ransomware operators."
+
+[[rule]]
+id = "PD-V018"
+name = ".NET profiler / startup hook hijack"
+tactic = "stealth"
+mitre = "T1574.012"
+weight = 35
+min_verdict = "SUSPICIOUS"
+pattern = 'cor_enable_profiling|cor_profiler|coreclr_enable_profiling|complus_\w+|dotnet_startup_hooks|appdomainmanager(assembly|type)'
+tags = ["evasion", "persistence", "injection"]
+why = "Profiler and startup-hook environment variables make every .NET process load an attacker DLL - stealthy code injection and persistence."
+
+[[rule]]
+id = "PD-V019"
+name = "Process or token manipulation APIs"
+tactic = "privilege-escalation"
+mitre = "T1134"
+weight = 35
+min_verdict = "SUSPICIOUS"
+pattern = 'start-hollow|ppid-spoof|invoke-ppidspoof|-spawnto\b|proc_thread_attribute_parent_process|updateprocthreadattribute|duplicatetoken(ex)?|impersonateloggedonuser|setthreadtoken|impersonatenamedpipeclient|createprocesswithtokenw|createprocessasuser|adjusttokenprivileges|sedebugprivilege|seimpersonateprivilege|ntsetinformationprocess'
+tags = ["privesc", "injection"]
+why = "Stealing or duplicating access tokens and spoofing the parent process are used to run code as SYSTEM or another user and to fool process-tree analysis."
+
+[[rule]]
+id = "PD-V020"
+name = "Data hidden in an alternate data stream"
+tactic = "stealth"
+mitre = "T1564.004"
+weight = 30
+pattern = '-stream\s+(?!zone\.identifier)\S+|\w\.(txt|log|ini|jpg|png|dat):\w+(\.(exe|dll|ps1|vbs|js))?\b|:\$data\b|\btype\s+\S+\s*>\s*\S+:\w+|\bmakecab\s+\S+\s+\S+:\w+'
+tags = ["evasion"]
+why = "NTFS alternate data streams hide payloads inside innocent-looking files where Explorer and dir do not show them."
+
+[[rule]]
+id = "PD-V022"
+name = "Forensic artefacts deleted"
+tactic = "stealth"
+mitre = "T1070.004"
+weight = 30
+pattern = '(remove-item|\bdel\b|\berase\b|\brd\b|\brmdir\b)\s+[^\n]*(\\prefetch\\|amcache\.hve|\\recent\\|automaticdestinations|customdestinations|\$extend\\\$usnjrnl|\\shimcache|\\minidump\\|\\windows\\temp\\[^\n]*\.log|teamviewer\w*\.log|\\anydesk\\[^\n]*\.trace|consolehost_history)|fsutil(\.exe)?\s+usn\s+deletejournal'
+tags = ["evasion"]
+why = "Prefetch, Amcache, jump lists, USN journal and remote-tool logs show which programs ran; deleting them is anti-forensics."
+
+[[rule]]
+id = "PD-V023"
+name = "Disk image mounted (Mark-of-the-Web bypass)"
+tactic = "defense-impairment"
+mitre = "T1553.005"
+weight = 20
+pattern = 'mount-diskimage|mount-vhd\b|\[shellexecute\][^\n]*\.iso|explorer(\.exe)?\s+[^\n]*\.(iso|img|vhdx?)\b'
+tags = ["evasion"]
+why = "Files inside a mounted ISO/IMG/VHD do not carry Mark-of-the-Web, so SmartScreen and Office protections are skipped - a common phishing delivery trick."
+fp = "Mounting install media."
+
+[[rule]]
+id = "PD-V024"
+name = "Windows admin tools disabled for the user"
+tactic = "defense-impairment"
+mitre = "T1112, T1562"
+weight = 30
+pattern = '\b(disablecmd|disabletaskmgr|disableregistrytools|nocontrolpanel|norun|disablelockworkstation|disablechangepassword|hidefastuserswitching|nologoff)\b[^\n]*(\b[12]\b|true)'
+tags = ["evasion"]
+why = "Blocking Task Manager, regedit or cmd stops the victim from investigating or killing the malware (seen in ransomware and RATs)."
+
+[[rule]]
+id = "PD-V021"
+name = "Disables recovery of deleted/changed files prompt or SmartScreen"
+tactic = "defense-impairment"
+mitre = "T1562.001"
+weight = 30
+pattern = 'smartscreenenabled[^\n]*(off|0)|enablesmartscreen[^\n]*\b0\b|\bvbawarnings\b[^\n]*\b1\b|accessvbom[^\n]*\b1\b|blockcontentexecutionfrominternet[^\n]*\b0\b|disableattachmentsinpv|disableinternetfilesinpv'
+tags = ["evasion"]
+why = "Turns off SmartScreen or Office macro protections so malicious documents and downloads run without warnings."
+
+# =====================================================================
+# IN-MEMORY / INJECTION / PAYLOADS
+# =====================================================================
+[[rule]]
+id = "PD-I001"
+name = "Reflective .NET assembly load"
+tactic = "stealth"
+mitre = "T1620"
+weight = 35
+pattern = '\[(system\.)?reflection\.assembly\]::(load|loadfile|loadfrom|unsafeloadfrom)|assembly\]::load\(|\.gettype\(\s*["\x27]system\.reflection|reflection\.emit|definedynamicassembly|appdomain\]::currentdomain\.load\('
+tags = ["inmemory", "execute"]
+why = "Loads a .NET program straight from memory (often a byte array or download) - how C# post-exploitation tools are run without dropping files."
+fp = "Some admin modules load helper DLLs this way."
+
+[[rule]]
+id = "PD-I002"
+name = "Win32 APIs for shellcode / process injection"
+tactic = "stealth"
+mitre = "T1055"
+weight = 45
+min_verdict = "SUSPICIOUS"
+pattern = 'virtualalloc(ex)?|virtualprotect(ex)?|createremotethread|writeprocessmemory|ntcreatethreadex|rtlcreateuserthread|queueuserapc|ntqueueapcthread|setthreadcontext|ntunmapviewofsection|zwunmapviewofsection|rtlmovememory|createthread\b|uuidfromstring|enumsystemlocales|ntallocatevirtualmemory|ntwritevirtualmemory|ntmapviewofsection'
+tags = ["injection"]
+why = "These APIs allocate executable memory and start threads in it or in other processes - the core of shellcode loaders and process injection/hollowing."
+
+[[rule]]
+id = "PD-I003"
+name = "Native API access via Add-Type / DllImport"
+tactic = "execution"
+mitre = "T1106"
+weight = 15
+pattern = 'dllimport|getdelegateforfunctionpointer|getprocaddress|loadlibrary\(|add-type\s+[^\n]*-memberdefinition|defineprinvokemethod|unsafenativemethods'
+tags = ["injection"]
+why = "Calling raw Windows APIs from PowerShell is needed for injection, token theft and patching AMSI/ETW. Rarely needed in admin scripts."
+fp = "Some admin scripts call user32/kernel32 for UI or console tweaks."
+
+[[rule]]
+id = "PD-I004"
+name = "Byte-array shellcode"
+tactic = "stealth"
+mitre = "T1027"
+weight = 30
+pattern = '\[byte\[\]\]\s*\$?\w*\s*=?\s*\(?\s*(0x[0-9a-f]{1,2}\s*,\s*){30,}|\[byte\[\]\]\s*\(\s*(\d{1,3}\s*,\s*){30,}'
+tags = ["payload"]
+why = "A long inline byte array is typically shellcode or an embedded executable waiting to be written to memory."
+
+[[rule]]
+id = "PD-I005"
+name = "Embedded Windows executable (MZ/PE)"
+tactic = "stealth"
+mitre = "T1027.009"
+weight = 35
+pattern = 'tvqqaamaaaaeaaaa|tvpqaaiaaaaeaa|tvoaaaaaaaaaaaaa|\b4d5a90000300000004000000ffff|\(\s*77\s*,\s*90\s*,\s*144\b|0x4d\s*,\s*0x5a\s*,\s*0x90'
+tags = ["payload"]
+why = "The base64/hex signature of a Windows executable header (MZ) is embedded in the script: a binary is being smuggled inside text."
+
+[[rule]]
+id = "PD-I006"
+name = "Runtime decoding of embedded data"
+tactic = "stealth"
+mitre = "T1140"
+weight = 10
+pattern = 'frombase64string|gzipstream|deflatestream|-bxor\b|\[convert\]::fromhexstring|\.decompress\(|system\.security\.cryptography\.(aes|rijndael)[\s\S]{0,200}createdecryptor|convertto-securestring\s+[^\n]*-key\b'
+tags = ["decode"]
+why = "Data is decoded, decompressed, XOR'ed or decrypted at run time. Harmless alone, but this is how packed payloads are unwrapped before execution."
+fp = "Certificates and config blobs are often base64-decoded."
+
+[[rule]]
+id = "PD-I007"
+name = "Steganography / payload in media file"
+tactic = "stealth"
+mitre = "T1027.003, T1001.002"
+weight = 25
+pattern = 'get-content\s+[^\n]*\.(jpg|jpeg|png|bmp|gif)[^\n]*-encoding\s+byte|system\.drawing\.bitmap[\s\S]{0,300}getpixel|invoke-psimage|\.(jpg|png|bmp|gif)["\x27]?\s*,[^\n]*-encoding\s+byte'
+tags = ["payload", "decode"]
+why = "Code or data hidden inside images to slip past content inspection."
+
+[[rule]]
+id = "PD-I008"
+name = "HTML/SVG smuggling content"
+tactic = "stealth"
+mitre = "T1027.006, T1027.017"
+weight = 25
+pattern = '<svg[^>]*\bon(load|error|click)\s*=|data:application/(octet-stream|x-msdownload)[^\n]*;base64|mssaveoropenblob|url\.createobjecturl|<script[^>]*>[\s\S]{0,300}(atob|fromcharcode)'
+tags = ["payload"]
+why = "Builds an HTML/SVG file that assembles and drops a payload inside the browser, bypassing web-proxy and mail scanning."
+
+# =====================================================================
+# PERSISTENCE
+# =====================================================================
+[[rule]]
+id = "PD-P001"
+name = "Run / RunOnce autostart key"
+tactic = "persistence"
+mitre = "T1547.001"
+weight = 30
+pattern = 'currentversion\\(run|runonce|runonceex|runservices|runservicesonce)\b|policies\\explorer\\run\b|currentversion\\explorer\\(user )?shell folders[^\n]*startup'
+tags = ["persistence"]
+why = "Programs listed under Run/RunOnce start automatically at every logon - the most common persistence mechanism."
+fp = "Software installers register legitimate autostart entries."
+
+[[rule]]
+id = "PD-P002"
+name = "Scheduled task created"
+tactic = "persistence"
+mitre = "T1053.005"
+weight = 20
+pattern = 'register-scheduledtask|new-scheduledtaskaction|schtasks(\.exe)?\s+/create|ps_scheduledtask|schedule\.service[\s\S]{0,200}(registertaskdefinition|newtask)|\bat(\.exe)?\s+\d{1,2}:\d{2}'
+tags = ["persistence"]
+why = "A scheduled task can relaunch a payload at logon, on a timer or as SYSTEM."
+fp = "Very common for legitimate maintenance jobs."
+
+[[rule]]
+id = "PD-P003"
+name = "WMI event subscription"
+tactic = "persistence"
+mitre = "T1546.003"
+weight = 50
+min_verdict = "MALICIOUS"
+pattern = '__eventfilter|commandlineeventconsumer|activescripteventconsumer|__filtertoconsumerbinding|register-wmievent|set-wmiinstance\s+[^\n]*root\\subscription'
+tags = ["persistence"]
+why = "Permanent WMI subscriptions run code when a system event fires; they are fileless, survive reboots and are rarely used by legitimate software."
+
+[[rule]]
+id = "PD-P004"
+name = "Service created or its binary path changed"
+tactic = "persistence"
+mitre = "T1543.003"
+weight = 20
+pattern = 'new-service\b|\bsc(\.exe)?\s+(\\\\\S+\s+)?(create|config)\b[^\n]*binpath|services\\[^\n\\]+[^\n]*imagepath|set-service\s+[^\n]*-binarypathname|win32_service[^\n]*create'
+tags = ["persistence"]
+why = "A service runs automatically, usually as SYSTEM - a reliable way to persist with high privileges."
+fp = "Installing a genuine Windows service."
+
+[[rule]]
+id = "PD-P004B"
+name = "Service runs a script interpreter"
+tactic = "persistence"
+mitre = "T1543.003"
+weight = 30
+min_verdict = "SUSPICIOUS"
+pattern = '(binpath\s*=?|-binarypathname|imagepath)[^\n]*(powershell|pwsh|cmd(\.exe)?\s+/c|%comspec%|mshta|rundll32|regsvr32|wscript|cscript)'
+tags = ["persistence", "execute"]
+why = "Genuine services point at a program, not at powershell or cmd /c. A service that launches a shell is how PsExec-style tools and attackers get SYSTEM code execution."
+
+[[rule]]
+id = "PD-P005"
+name = "Startup folder or PowerShell profile modified"
+tactic = "persistence"
+mitre = "T1547.001, T1546.013"
+weight = 25
+pattern = 'start menu\\programs\\startup|\\startup\\[^\n]*\.(lnk|bat|cmd|vbs|js|exe|ps1)|\$profile\b[^\n]*(add-content|set-content|out-file|>>)|(add-content|set-content|out-file)\s+[^\n]*\$profile\b|\\windowspowershell\\[^\n]*profile\.ps1'
+tags = ["persistence"]
+why = "Anything in the Startup folder or a PowerShell profile runs automatically every time the user logs on or opens PowerShell."
+
+[[rule]]
+id = "PD-P006"
+name = "Hijackable autostart registry location"
+tactic = "persistence"
+mitre = "T1547, T1546"
+weight = 40
+min_verdict = "SUSPICIOUS"
+pattern = 'winlogon\\?["\x27]?\s*[^\n]*\b(shell|userinit|notify|taskman|appsetup)\b|image file execution options\\[^\n]*(debugger|globalflag)|silentprocessexit\\[^\n]*(monitorprocess|reportingmode)|appinit_dlls|loadappinit_dlls|appcertdlls|command processor[^\n]*autorun|active setup\\installed components[^\n]*stubpath|winsock2\\parameters[^\n]*autodialdll|\\lsa\b[^\n]*(security packages|authentication packages|notification packages)|w32time\\timeproviders|control\\print\\(monitors|environments\\[^\n]*print processors)|netsh\\|\bbootexecute\b|office test\\special\\perf|control panel\\desktop[^\n]*scrnsave\.exe|\\environment[^\n]*userinitmprlogonscript|terminal server\\wds\\rdpwd[^\n]*startupprograms|\\shell\\open\\command[^\n]*(powershell|cmd|mshta|rundll32)|session manager\\environment[^\n]*(cor_|complus_|path)|gpextensions|\\ifeo\\'
+requires = ['(set-itemproperty|new-itemproperty|new-item|reg(\.exe)?\s+(add|import)|\.setvalue\(|createsubkey|\bsp\s|regedit(\.exe)?\s+/s|copy-item|\bcopy\b)']
+tags = ["persistence"]
+why = "These registry locations (Winlogon Shell/Userinit, IFEO debugger, AppInit/AppCert DLLs, LSA packages, time/print providers, Active Setup ...) make Windows load attacker code automatically, often as SYSTEM, and are rarely touched by normal software."
+
+[[rule]]
+id = "PD-P007"
+name = "COM object hijack"
+tactic = "persistence"
+mitre = "T1546.015"
+weight = 30
+pattern = '(classes\\clsid\\\{[0-9a-f-]{36}\}|classes\\\w+\\clsid)[^\n]*(inprocserver32|localserver32|treatas|scriptleturl|progid)'
+requires = ['(set-itemproperty|new-item|new-itemproperty|reg(\.exe)?\s+add|setvalue|createsubkey)']
+tags = ["persistence"]
+why = "Re-pointing a COM class to an attacker DLL means legitimate programs load the payload whenever they use that object."
+
+[[rule]]
+id = "PD-P008"
+name = "Added to a privileged group"
+tactic = "persistence"
+mitre = "T1098"
+weight = 35
+min_verdict = "SUSPICIOUS"
+pattern = '(add-localgroupmember|add-adgroupmember|net(1)?(\.exe)?\s+(local)?group|add-adprincipalgroupmembership)\s+[^\n]*(administrators|domain admins|enterprise admins|schema admins|backup operators|account operators|server operators|remote desktop users|remote management users|dnsadmins|group policy creator owners)\b[^\n]*(/add\b|-member|-memberof|-identity)'
+tags = ["persistence", "privesc"]
+why = "Membership in admin-level groups gives an attacker lasting privileged access that survives password resets of the original foothold."
+fp = "Helpdesk granting admin rights through an approved change."
+
+[[rule]]
+id = "PD-P009"
+name = "Account created or credentials changed"
+tactic = "persistence"
+mitre = "T1136, T1098"
+weight = 20
+pattern = 'net(1)?(\.exe)?\s+user\s+\S+\s+\S+\s+/add|new-localuser\b|new-aduser\b|set-adaccountpassword|set-localuser\s+[^\n]*-password|net(1)?\s+user\s+\S+\s+\S+\s*$|add-mailboxpermission\s+[^\n]*fullaccess|new-azureadserviceprincipalpasswordcredential|new-azadserviceprincipalcredential|add-azureaddirectoryrolemember|new-mgserviceprincipalpassword'
+tags = ["persistence"]
+why = "A new or modified account (or app credential) is a backdoor that keeps working even after the original infection is cleaned up."
+fp = "Normal user provisioning and password resets."
+
+[[rule]]
+id = "PD-P010"
+name = "Office add-in / startup persistence"
+tactic = "persistence"
+mitre = "T1137"
+weight = 30
+pattern = '\\(xlstart|word\\startup|excel\\xlstart)\\|\.(xlam|wll|xll|dotm)\b[^\n]*(copy|new-item|move)|(copy|copy-item|move-item)[^\n]*\.(xlam|wll|xll|dotm)\b|office\\[\d.]+\\(excel|word|outlook|powerpoint)\\(options|addins)[^\n]*(open|loadbehavior)|outlook[\s\S]{0,200}(\.rules\.create|homepage|forms)|\\outlook\\webview\\'
+tags = ["persistence"]
+why = "Office loads add-ins, startup templates and Outlook rules/home pages automatically, giving code execution every time the user opens Office."
+
+[[rule]]
+id = "PD-P010B"
+name = "Mailbox rule forwards or deletes mail"
+tactic = "collection"
+mitre = "T1114.003, T1564.008"
+weight = 40
+min_verdict = "SUSPICIOUS"
+pattern = '\.rules\.create\(|olruletype|\.forwardaction|\.redirectaction|\.deletepermanently|new-inboxrule\s+[^\n]*-(forwardto|redirectto|forwardasattachmentto|deletemessage|movetofolder)|set-inboxrule\s+[^\n]*-(forwardto|redirectto|deletemessage)|set-mailbox\s+[^\n]*-forwardingsmtpaddress|forwardingaddress\s+\S+@'
+tags = ["collection", "persistence"]
+why = "Inbox rules that auto-forward or silently delete mail are a classic business-email-compromise trick: the attacker keeps reading mail and hides replies from the victim."
+fp = "User-created forwarding rules approved by IT."
+
+[[rule]]
+id = "PD-P015"
+name = "Script stored in the registry (fileless)"
+tactic = "stealth"
+mitre = "T1112, T1027.011"
+weight = 40
+min_verdict = "SUSPICIOUS"
+pattern = '(set-itemproperty|new-itemproperty|reg(\.exe)?\s+add|\.setvalue\()[^\n]*(<script|javascript:|vbscript:|mshta|frombase64string|\biex\b|invoke-expression|powershell[^\n]*-e(nc\w*)?\s+[a-z0-9+/=]{20,})|(get-itemproperty|\.getvalue\()[^\n]*\)[^\n]*\|\s*(iex|invoke-expression)'
+tags = ["persistence", "payload"]
+why = "Storing script code in registry values (then reading and executing it) is a fileless technique used by Poweliks/Kovter-style malware to avoid file scanning."
+
+[[rule]]
+id = "PD-P016"
+name = "Scheduled task with elevated or hidden settings"
+tactic = "privilege-escalation"
+mitre = "T1053.005"
+weight = 10
+pattern = '-runlevel\s+highest|/rl\s+highest|registerbyxml|<hidden>\s*true|-hidden\b[^\n]*new-scheduledtasksettingsset|new-scheduledtasksettingsset\s+[^\n]*-hidden'
+requires = ['(register-scheduledtask|new-scheduledtask|schtasks|ps_scheduledtask|registertaskdefinition)']
+tags = ["privesc"]
+why = "The task runs with highest privileges or is hidden from the Task Scheduler UI."
+fp = "Admin maintenance tasks that need elevation."
+
+[[rule]]
+id = "PD-P017"
+name = "Browser extension force-installed"
+tactic = "persistence"
+mitre = "T1176"
+weight = 30
+pattern = '\\(google\\chrome|microsoft\\edge|bravesoftware\\brave-browser)\\extensions\\[a-p]{32}|extensioninstallforcelist|--load-extension='
+tags = ["persistence"]
+why = "Force-installed or side-loaded browser extensions can read every page, steal cookies and session tokens, and survive browser restarts."
+fp = "Extension deployment via Group Policy/Intune."
+
+[[rule]]
+id = "PD-P011"
+name = "Application shim installed"
+tactic = "persistence"
+mitre = "T1546.011"
+weight = 40
+min_verdict = "SUSPICIOUS"
+pattern = '\bsdbinst(\.exe)?\b|apppatch\\custom|\\appcompatflags\\(custom|installedsdb)'
+tags = ["persistence"]
+why = "Custom application-compatibility shims can inject DLLs into any program and are a rarely-monitored persistence method."
+
+[[rule]]
+id = "PD-P012"
+name = "BITS job with notify command"
+tactic = "persistence"
+mitre = "T1197"
+weight = 35
+min_verdict = "SUSPICIOUS"
+pattern = 'bitsadmin(\.exe)?\s+[^\n]*/(setnotifycmdline|setnotifyflags)|set-bitstransfer\s+[^\n]*notify'
+tags = ["persistence"]
+why = "A BITS job notification command re-runs a program whenever the job completes or errors, surviving reboots."
+
+[[rule]]
+id = "PD-P013"
+name = "Accessibility-feature backdoor"
+tactic = "persistence"
+mitre = "T1546.008"
+weight = 50
+min_verdict = "MALICIOUS"
+pattern = '(copy|copy-item|move|takeown|icacls|replace|image file execution options)[^\n]*\b(sethc|utilman|osk|magnify|narrator|displayswitch|atbroker)\.exe'
+tags = ["persistence", "privesc"]
+why = "Replacing sticky keys/utilman (or debugging them via IFEO) gives a SYSTEM shell at the Windows logon screen without credentials."
+
+[[rule]]
+id = "PD-P014"
+name = "Logon script / Group Policy script set"
+tactic = "persistence"
+mitre = "T1037"
+weight = 25
+pattern = 'userinitmprlogonscript|\\scripts\\(logon|startup)\\|scripts\.ini|psscripts\.ini|set-gppermission[^\n]*gpoeditdeletemodifysecurity|new-gplink'
+tags = ["persistence"]
+why = "Logon/startup scripts run for every user or computer the policy applies to - one change reaches many machines."
+fp = "Legitimate GPO administration."
+
+# =====================================================================
+# PRIVILEGE ESCALATION
+# =====================================================================
+[[rule]]
+id = "PD-E101"
+name = "UAC bypass via registry hijack"
+tactic = "privilege-escalation"
+mitre = "T1548.002"
+weight = 50
+min_verdict = "MALICIOUS"
+pattern = '(ms-settings|mscfile|exefile|folder|launcher\.systemsettings|appx\w+)\\shell\\open\\command|delegateexecute|\b(fodhelper|computerdefaults|eventvwr|sdclt|slui|wsreset|changepk)(\.exe)?\b[\s\S]{0,300}(shell\\open|delegateexecute)|(shell\\open|delegateexecute)[\s\S]{0,300}\b(fodhelper|computerdefaults|eventvwr|sdclt|slui|wsreset|changepk)\b|cmstp(\.exe)?\s+[^\n]*/au\b|\\environment[^\n]*windir[^\n]*(&|cmd|powershell)'
+tags = ["privesc"]
+why = "Auto-elevating Windows binaries read these registry keys; hijacking them launches attacker code with admin rights and no UAC prompt."
+
+[[rule]]
+id = "PD-E102"
+name = "Privilege escalation tool"
+tactic = "privilege-escalation"
+mitre = "T1134, T1068"
+weight = 50
+min_verdict = "MALICIOUS"
+pattern = '\b(juicypotato|roguepotato|sweetpotato|godpotato|efspotato|localpotato|coercedpotato|printspoofer|badpotato|rottenpotato|nsudo(lg)?|tokenvator|incognito|beroot|watson|sharpup|privesccheck|winpeas|seatbelt|kdu\.exe|gdrv|rtcore64|dbutil_2_3)\b'
+tags = ["privesc"]
+why = "Known tooling for abusing impersonation privileges, vulnerable drivers or misconfigurations to become SYSTEM."
+
+[[rule]]
+id = "PD-E103"
+name = "Runs as SYSTEM via PsExec-style tool"
+tactic = "privilege-escalation"
+mitre = "T1569.002"
+weight = 30
+pattern = '\b(psexec|psexec64|paexec|csexec|remcom)(\.exe)?\b[^\n]*(\s-s\b|\s-i\b|\\\\)'
+tags = ["privesc", "lateral", "execute"]
+why = "PsExec -s / remote mode runs commands as SYSTEM or on other hosts through a temporary service - used by admins and by ransomware operators alike."
+fp = "Sysadmins using Sysinternals PsExec."
+
+# =====================================================================
+# CREDENTIAL ACCESS
+# =====================================================================
+[[rule]]
+id = "PD-C001"
+name = "Mimikatz / credential dumping tool"
+tactic = "credential-access"
+mitre = "T1003.001"
+weight = 80
+min_verdict = "MALICIOUS"
+pattern = 'mimikatz|sekurlsa|logonpasswords|lsadump::|kerberos::(golden|ptt|list|tgt)|privilege::debug|token::elevate|invoke-mimikatz|dumpcreds|pypykatz|safetykatz|betterSafetyKatz|nanodump|handlekatz|lsassy|invoke-powerdump|powerdump|\bdumpert\b|\bpplkiller|\bmirrordump'
+tags = ["credential"]
+why = "Mimikatz and its clones read passwords, hashes and Kerberos tickets from memory; there is no benign reason to run them on a production host."
+
+[[rule]]
+id = "PD-C002"
+name = "LSASS memory dump"
+tactic = "credential-access"
+mitre = "T1003.001"
+weight = 70
+min_verdict = "MALICIOUS"
+pattern = 'comsvcs(\.dll)?["\x27]?[\s,]+#?(minidump|24)|out-minidump|minidumpwritedump|procdump(64)?(\.exe)?\s+[^\n]*(lsass|-ma\s+\d+)|lsass[^\n]*\.dmp|createdump(\.exe)?\s+[^\n]*\d|sqldumper(\.exe)?\s+\d+\s+0\s+0x01|rdrleakdiag|tttracer(\.exe)?\s+[^\n]*-attach|(get-process|ps)\s+lsass[\s\S]{0,200}(dump|minidump|\.dmp)'
+tags = ["credential"]
+why = "LSASS holds the credentials of every logged-on user. Dumping its memory lets an attacker extract passwords and hashes offline."
+
+[[rule]]
+id = "PD-C003"
+name = "SAM / SECURITY / NTDS.dit extraction"
+tactic = "credential-access"
+mitre = "T1003.002, T1003.003"
+weight = 60
+min_verdict = "MALICIOUS"
+pattern = 'reg(\.exe)?\s+(save|export)\s+["\x27]?(hklm|hkey_local_machine)\\(sam|security|system)\b|ntdsutil(\.exe)?\s+[^\n]*(ifm|create full|snapshot)|\\ntds\.dit|esentutl(\.exe)?\s+[^\n]*(ntds|\\config\\sam)|harddiskvolumeshadowcopy\d*\\windows\\(ntds|system32\\config\\(sam|security|system))|vssadmin(\.exe)?\s+create\s+shadow|win32_shadowcopy[^\n]*create|invoke-ninjacopy|\\system32\\config\\(sam|security)\b[^\n]*(copy|cp|\[io\.file\])|underlaycopy|rawcopy'
+tags = ["credential"]
+why = "The SAM, SECURITY and NTDS.dit databases contain password hashes for local and domain accounts. Copying them (often via shadow copies) enables offline cracking and pass-the-hash."
+
+[[rule]]
+id = "PD-C004"
+name = "Kerberos / AD credential attack"
+tactic = "credential-access"
+mitre = "T1558, T1003.006"
+weight = 50
+min_verdict = "MALICIOUS"
+pattern = 'invoke-kerberoast|rubeus|kerberoast|asreproast|kerberosrequestorsecuritytoken|\bget-gpppassword|get-unattendedinstallfile|groups\.xml[\s\S]{0,100}cpassword|cpassword|dcsync|lsadump::dcsync|getuserspns|impacket|secretsdump|kerbrute|\bgetnpusers|\bgetst\.py|asktgt|asktgs|s4u2self|krbtgt|invoke-dcsync|\bsharproast|certify(\.exe)?\s+(find|request)|\bcertipy|esc\d+\b[^\n]*(certify|certipy)'
+tags = ["credential"]
+why = "Requesting crackable service tickets, abusing replication (DCSync) or AD CS, or harvesting GPP passwords are direct attacks on domain credentials."
+
+[[rule]]
+id = "PD-C005"
+name = "Browser / vault / password-store theft"
+tactic = "credential-access"
+mitre = "T1555"
+weight = 40
+min_verdict = "SUSPICIOUS"
+pattern = '(chrome|edge|brave|opera|vivaldi|chromium)[^\n]*\\user data\\[^\n]*(login data|web data|cookies|local state)|\\(login data|web data|local state)["\x27\s]|key4\.db|logins\.json|cookies\.sqlite|vaultcmd(\.exe)?\s+/list|windows\.security\.credentials\.passwordvault|keymgr(\.dll)?,\s*krshowkeymgr|cmdkey(\.exe)?\s+/list|get-storedcredential|lazagne|webbrowserpassview|\bsharpchrome|\bsharpdpapi|\bdpapi::|\*\.kdb[x]?\b|keepass\.config\.xml|\.kdbx\b[^\n]*(copy|compress|send|upload|invoke-webrequest)|(copy|compress-archive)[^\n]*\.kdbx|\\appdata\\roaming\\microsoft\\(credentials|protect)\\|(copy-item|copy|robocopy|xcopy|compress-archive)\s+[^\n]*(mozilla\\firefox\\profiles|\\user data\\default|\\user data["\x27\\]\s)|firepwd|\bhackbrowserdata'
+tags = ["credential"]
+why = "Copying browser login databases, cookies, DPAPI master keys, the Windows vault or password-manager files gives the attacker saved passwords and live sessions."
+
+[[rule]]
+id = "PD-C006"
+name = "Searching files for passwords"
+tactic = "credential-access"
+mitre = "T1552.001"
+weight = 20
+pattern = 'findstr(\.exe)?\s+[^\n]*/s[^\n]*\b(pass|password|pwd|cred)|select-string\s+[^\n]*-pattern\s+["\x27]?(pass|password|pwd|credential)|-include\s+[^\n]*(\*pass\*|\*cred\*|unattend\.xml|sysprep\.(xml|inf)|web\.config|\*\.kdbx|id_rsa|\*\.ppk|\*\.rdp)|\\(unattend|sysprep)\.xml|\\panther\\unattend'
+tags = ["credential", "recon"]
+why = "Hunting for passwords in scripts, configs, unattend files and keys is a quick way to find reusable credentials."
+fp = "Security teams running their own secret scans."
+
+[[rule]]
+id = "PD-C007"
+name = "Password spraying / brute force"
+tactic = "credential-access"
+mitre = "T1110"
+weight = 40
+min_verdict = "SUSPICIOUS"
+pattern = 'domainpasswordspray|invoke-passwordspray|invoke-bruteforce|\.validatecredentials\(|kerbrute|spray(ad|ing)?\b[^\n]*pass|directoryservices\.directoryentry\([^\n]*,\s*\$\w*(pass|pwd)|foreach[^\n]*\$\w*(pass|pwd)\w*[\s\S]{0,200}(directoryentry|ldap|validatecredentials|net\s+use)'
+tags = ["credential"]
+why = "Trying passwords against many accounts (or many passwords against one) is an online guessing attack against the domain."
+
+[[rule]]
+id = "PD-C008"
+name = "Fake credential prompt"
+tactic = "credential-access"
+mitre = "T1056.002"
+weight = 25
+pattern = 'creduipromptforcredentials|\$host\.ui\.promptforcredential\(|get-credential\s+[^\n]*-message\s+["\x27][^\n]*(expired|verify|update|re-?enter|security|microsoft|outlook|session)'
+tags = ["credential"]
+why = "Pops a convincing Windows/Outlook login box to phish the logged-on user's password."
+fp = "Admin scripts that ask for credentials with a custom message."
+
+[[rule]]
+id = "PD-C009"
+name = "WDigest / LSA protection weakened"
+tactic = "credential-access"
+mitre = "T1112, T1003.001"
+weight = 45
+min_verdict = "SUSPICIOUS"
+pattern = 'wdigest[^\n]*uselogoncredential[^\n]*\b1\b|\\lsa\b[^\n]*runasppl[^\n]*\b0\b|disablerestrictedadmin[^\n]*\b0\b|\\lsa\b[^\n]*(disabledomaincreds|limitblankpassworduse|nolmhash)[^\n]*\b(0|1)\b|lsacfgflags[^\n]*\b0\b|credssp[^\n]*allowdefaultcredentials|tokenleakdetectdelaysecs'
+tags = ["credential", "evasion"]
+why = "Re-enabling WDigest makes Windows keep plaintext passwords in memory; disabling LSA protection/Credential Guard makes LSASS dumpable."
+
+[[rule]]
+id = "PD-C010"
+name = "Cloud / identity token theft tooling"
+tactic = "credential-access"
+mitre = "T1528, T1552.004"
+weight = 50
+min_verdict = "MALICIOUS"
+pattern = 'aadinternals|export-aadint|get-aadintaccesstoken|roadtools|roadrecon|tokentactics|graphrunner|azurehound|microburst|get-azpasswords|\bpowerzure|invoke-adfsexport|adfsdump|export-adfs\w*certificate|\bmsolspray|\btrevorspray|\bteamfiltration'
+tags = ["credential"]
+why = "Tooling to steal Azure AD/Entra tokens, ADFS signing certificates or spray cloud accounts - leads to cloud tenant compromise (golden SAML, token replay)."
+
+[[rule]]
+id = "PD-C011"
+name = "Plaintext password on the command line"
+tactic = "credential-access"
+mitre = "T1552"
+weight = 5
+pattern = 'convertto-securestring\s+[^\n]*-asplaintext|-password\s+["\x27][^"\x27$]{4,}["\x27]|/pass(word)?[:=]\S+|/p:\S+'
+tags = []
+why = "A password is written in clear text in the command. Context only: it exposes credentials in logs and may be stolen or sprayed."
+fp = "Common (bad practice) in admin scripts."
+
+[[rule]]
+id = "PD-C013"
+name = "IIS application-pool password extraction"
+tactic = "credential-access"
+mitre = "T1003"
+weight = 45
+min_verdict = "SUSPICIOUS"
+pattern = 'appcmd(\.exe)?["\x27]?\s+list\s+(apppool|vdir|site)\s+[^\n]*(/text:\*|/@t(ext)?:\*|/config|password)'
+tags = ["credential"]
+why = "appcmd can print the clear-text passwords of IIS application-pool and virtual-directory identities."
+
+[[rule]]
+id = "PD-C014"
+name = "Credential capture via network provider / logon hooks"
+tactic = "credential-access"
+mitre = "T1556.008, T1556.002"
+weight = 50
+min_verdict = "MALICIOUS"
+pattern = 'networkprovider\\order[^\n]*providerorder|\bnppspy\b|\bnpspy\b|\\lsa\b[^\n]*notification packages|passwordfilter|\bmimilib\b|\\control\\lsa[^\n]*(set-itemproperty|reg add)'
+tags = ["credential", "persistence"]
+why = "A malicious network provider or LSA password filter DLL receives every user's clear-text password at logon or password change."
+
+[[rule]]
+id = "PD-C015"
+name = "Forced NTLM authentication (coercion)"
+tactic = "credential-access"
+mitre = "T1187"
+weight = 35
+min_verdict = "SUSPICIOUS"
+pattern = '\brpcping(\.exe)?\s+[^\n]*[-/]u\s+ntlm|\bpetitpotam|\bspoolsample|\bdfscoerce|\bcoercer\b|\bprinterbug|\bshadowcoerce|\.searchconnector-ms|\.library-ms[^\n]*\\\\|desktop\.ini[^\n]*iconresource=\\\\'
+tags = ["credential"]
+why = "Forces Windows to authenticate to an attacker-chosen server, leaking NTLM hashes for cracking or relaying."
+
+[[rule]]
+id = "PD-C012"
+name = "Exports private keys or certificates"
+tactic = "credential-access"
+mitre = "T1552.004, T1649"
+weight = 30
+pattern = 'export-pfxcertificate|crypto::(certificates|capi|cng)|certutil(\.exe)?\s+[^\n]*-exportpfx|\.export\(\s*\[[^\]]*x509contenttype\]::pfx|exportable\s*=\s*\$true[\s\S]{0,200}export'
+tags = ["credential"]
+why = "Exporting private keys or certificates (code-signing, ADFS, user auth) gives the attacker a way to impersonate users or services."
+fp = "Certificate migrations and backups."
+
+# =====================================================================
+# DISCOVERY (low weight, context)
+# =====================================================================
+[[rule]]
+id = "PD-R001"
+name = "Host / user / domain discovery"
+tactic = "discovery"
+mitre = "T1087, T1082"
+weight = 5
+pattern = '\b(whoami|net(1)?\s+(user|group|localgroup|accounts|view|share|session)|nltest|get-aduser|get-adcomputer|get-adgroupmember|get-domaincontroller|systeminfo|get-localgroupmember|quser|qwinsta|query\s+user|dsquery|get-netneighbor|arp\s+-a|route\s+print|netstat\s+-\w*a)\b'
+tags = ["recon"]
+why = "Enumerates users, groups, hosts or network state. Normal admin activity; meaningful only alongside other indicators."
+
+[[rule]]
+id = "PD-R002"
+name = "Keylogging or screen capture"
+tactic = "collection"
+mitre = "T1056.001, T1113"
+weight = 35
+min_verdict = "SUSPICIOUS"
+pattern = 'getasynckeystate|getkeyboardstate|setwindowshookex|copyfromscreen|get-keystrokes|get-timedscreenshot|psr(\.exe)?\s+/start|mapvirtualkey|\bsystem\.windows\.forms\.screen[\s\S]{0,200}(bitmap|save)'
+tags = ["collection"]
+why = "Records keystrokes or screenshots to capture passwords and sensitive information as the user works."
+
+[[rule]]
+id = "PD-R003"
+name = "Active Directory reconnaissance tooling"
+tactic = "discovery"
+mitre = "T1087.002, T1482"
+weight = 35
+min_verdict = "SUSPICIOUS"
+pattern = '\b(sharphound|bloodhound|azurehound|soaphound|adrecon|adfind|adexplorer|pingcastle|invoke-adrecon|get-domaintrust|get-forestdomain|get-netdomaintrust|invoke-mapdomaintrust|nltest\s+/domain_trusts|ldapdomaindump|adidnsdump|snaffler|csvde|ldifde)\b'
+tags = ["recon"]
+why = "Bulk AD enumeration tools map users, groups, trusts and admin paths - the first step of most domain takeovers."
+fp = "Your own security assessments (PingCastle, BloodHound) by the blue team."
+
+[[rule]]
+id = "PD-R004"
+name = "Security product discovery"
+tactic = "discovery"
+mitre = "T1518.001"
+weight = 10
+pattern = 'securitycenter2[^\n]*antivirusproduct|get-mpcomputerstatus[\s\S]{0,100}(disable|stop)|(tasklist|get-process)[^\n]*(msmpeng|sense|csfalcon|sentinel|cylance|sophos)|fltmc(\.exe)?\s*$|fltmc\s+instances|\\sysmondrv|get-service\s+[^\n]*(windefend|sense|sysmon|csagent)'
+tags = ["recon"]
+why = "Checks which antivirus/EDR is installed, usually to decide how to evade or disable it."
+fp = "Inventory and compliance scripts."
+
+[[rule]]
+id = "PD-R005"
+name = "Network or port scanning"
+tactic = "discovery"
+mitre = "T1046"
+weight = 20
+pattern = '\d+\.\.\d+\s*\|\s*(%|foreach-object)\s*\{[^\n]*(test-connection|test-netconnection|ping|tcpclient|connect\()|invoke-portscan|\bnmap(\.exe)?\b|\bmasscan\b|advanced_ip_scanner|\bnetscan(\.exe)?\b|\bangryip|invoke-sharefinder|find-localadminaccess|invoke-userhunter|get-netshare\b'
+tags = ["recon"]
+why = "Sweeping IP ranges or ports, or hunting for shares and admin access, maps targets for lateral movement."
+
+[[rule]]
+id = "PD-R006"
+name = "Credential-relevant discovery (sessions, logged-on admins)"
+tactic = "discovery"
+mitre = "T1033"
+weight = 10
+pattern = 'get-netsession|get-netloggedon|invoke-enumeratelocaladmin|get-netlocalgroup|get-wmiobject\s+[^\n]*win32_loggedonuser|query\s+session'
+tags = ["recon"]
+why = "Finds where privileged users are logged on - attackers use this to decide which host to compromise next for credentials."
+
+# =====================================================================
+# COLLECTION
+# =====================================================================
+[[rule]]
+id = "PD-K001"
+name = "Data staged into an archive"
+tactic = "collection"
+mitre = "T1560, T1074.001"
+weight = 20
+pattern = 'compress-archive\s+[^\n]*(\\users\\|\$env:userprofile|appdata|documents|desktop|\.kdbx|\\ntds|\\config\\)|\$env:userprofile[^\n]*-recurse[^\n]*\|\s*compress-archive|compress-archive\s+[^\n]*-destinationpath\s+["\x27]?(\$env:(temp|tmp|public|appdata|localappdata)|c:\\users\\public|c:\\programdata)|\b(7z|7za|rar|winrar)(\.exe)?["\x27]?\s+a\s+[^\n]*(-p|-hp)|makecab(\.exe)?\s+[^\n]*\\users\\'
+tags = ["collection"]
+why = "Packs user data (optionally password-protected) for exfiltration."
+fp = "Backups and log collection."
+
+[[rule]]
+id = "PD-K002"
+name = "Email collection"
+tactic = "collection"
+mitre = "T1114"
+weight = 25
+pattern = 'outlook\.application[\s\S]{0,300}(getnamespace|getdefaultfolder|\.items)|new-mailboxexportrequest|search-mailbox\s+[^\n]*-targetmailbox|new-compliancesearch(action)?\s+[^\n]*export|get-inbox'
+tags = ["collection"]
+why = "Reads or exports mailboxes - email holds credentials, invoices and business secrets."
+fp = "eDiscovery and mailbox migrations."
+
+[[rule]]
+id = "PD-K003"
+name = "Bulk collection of user documents"
+tactic = "collection"
+mitre = "T1005, T1119, T1025"
+weight = 30
+pattern = '(get-childitem|\bdir\b|\bls\b|gci)\s+[^\n]*-recurse[^\n]*-include\s+[^\n]*\*?\.(doc|xls|pdf|ppt|txt|kdbx|pst|ost)[\s\S]{0,300}(copy-item|compress-archive|\.upload|invoke-webrequest|\.fullname)|get-volume[\s\S]{0,200}removable[\s\S]{0,300}(get-childitem|copy)|\$fileextensions[\s\S]{0,400}(get-childitem|compress-archive)'
+tags = ["collection"]
+why = "Recursively gathers documents (or removable-drive contents) into one place for theft."
+
+[[rule]]
+id = "PD-K004"
+name = "Clipboard or audio capture"
+tactic = "collection"
+mitre = "T1115, T1123"
+weight = 10
+pattern = 'get-clipboard[\s\S]{0,200}(while|for\s*\(|out-file|add-content|invoke-webrequest)|windows\.forms\.clipboard[\s\S]{0,100}gettext|get-micaudio|waveinopen|mcisendstring|get-audiodevice\s+-recording'
+tags = ["collection"]
+why = "Repeatedly reads the clipboard or records audio - passwords are often copied and pasted."
+
+# =====================================================================
+# LATERAL MOVEMENT
+# =====================================================================
+[[rule]]
+id = "PD-L001"
+name = "Remote command execution"
+tactic = "lateral-movement"
+mitre = "T1021.006, T1047"
+weight = 25
+pattern = 'invoke-command\s+[^\n]*-(computername|cn|session)\b|enter-pssession|new-pssession|invoke-wmimethod\s+[^\n]*-computername|new-cimsession|\bwmic(\.exe)?\s+/node:|\bwinrs(\.exe)?\s+-r:|schtasks(\.exe)?\s+[^\n]*/s\s+\S|\bsc(\.exe)?\s+\\\\|gettypefromprogid\([^\n]*,\s*["\x27][^"\x27]+["\x27]\s*\)|evil-winrm|invoke-smbexec|invoke-wmiexec|\bcrackmapexec|\bnetexec\b|\bnxc\s+(smb|winrm|ldap)|\bsmbexec|\bwmiexec|\batexec|\bdcomexec'
+tags = ["lateral"]
+why = "Runs commands on other machines (WinRM, WMI, DCOM, remote services/tasks) - how an intrusion spreads from the first host."
+fp = "Normal remote administration with Invoke-Command."
+
+[[rule]]
+id = "PD-L002"
+name = "Remote access enabled (RDP / WinRM)"
+tactic = "lateral-movement"
+mitre = "T1021.001, T1021.006"
+weight = 20
+pattern = 'winstations\\rdp-tcp[^\n]*portnumber|get-vmhostservice[\s\S]{0,200}tsm-ssh[\s\S]{0,200}start-vmhostservice|(start|set)-vmhostservice[^\n]*tsm-ssh|fdenytsconnections[^\n]*\b0\b|enable-psremoting|winrm(\.cmd)?\s+(quickconfig|qc)\b|set-item\s+wsman:\\localhost\\client\\trustedhosts\s+[^\n]*\*|netsh\s+[^\n]*remotedesktop[^\n]*enable|\buserauthentication[^\n]*\b0\b|shadow[^\n]*terminal services|\\terminal server[^\n]*(fsinglesessionperuser|maxinstancecount)'
+tags = ["lateral"]
+why = "Opens RDP or WinRM (or weakens their authentication) so the attacker can log in interactively or remotely manage the host."
+fp = "Initial server configuration."
+
+[[rule]]
+id = "PD-L003"
+name = "Admin share or hidden share access"
+tactic = "lateral-movement"
+mitre = "T1021.002"
+weight = 25
+pattern = '\\\\[^\\\s]+\\(c|admin|ipc)\$|new-psdrive\s+[^\n]*\\\\[^\n]*\\(c|admin)\$|net(1)?\s+use\s+[^\n]*\\(c|admin|ipc)\$'
+tags = ["lateral"]
+why = "C$/ADMIN$ shares are how tools copy payloads to other machines before executing them remotely."
+fp = "Admins browsing remote disks."
+
+[[rule]]
+id = "PD-L004"
+name = "Stored RDP / network credentials"
+tactic = "lateral-movement"
+mitre = "T1021.001"
+weight = 30
+pattern = 'cmdkey(\.exe)?\s+[^\n]*/(generic|add):[^\n]*/pass|cmdkey(\.exe)?\s+/generic:termsrv|mstsc(\.exe)?\s+[^\n]*/(v|admin|restrictedadmin)'
+tags = ["lateral", "credential"]
+why = "Saving credentials with cmdkey and launching mstsc automates RDP logons to other hosts."
+
+[[rule]]
+id = "PD-L005"
+name = "Remote file copy to another host"
+tactic = "lateral-movement"
+mitre = "T1570"
+weight = 15
+pattern = '(copy-item|copy|xcopy|robocopy)\s+[^\n]*\.(exe|dll|ps1|bat|vbs|hta)\s+["\x27]?\\\\|copy-item\s+[^\n]*-tosession|/transport:quic|-transporttype\s+quic|new-smbmapping\s+[^\n]*-skipcertificatecheck'
+tags = ["lateral"]
+why = "Copies an executable or script to another machine - a common precursor to remote execution."
+
+# =====================================================================
+# IMPACT
+# =====================================================================
+[[rule]]
+id = "PD-X001"
+name = "Shadow copies deleted"
+tactic = "impact"
+mitre = "T1490"
+weight = 80
+min_verdict = "MALICIOUS"
+pattern = 'vssadmin(\.exe)?\s+[^\n]*delete\s+shadows|vssadmin(\.exe)?\s+[^\n]*resize\s+shadowstorage[^\n]*maxsize=\d+(kb|mb)\b|win32_shadowcopy[\s\S]{0,120}(delete|remove-ciminstance|remove-wmiobject)|(get-wmiobject|get-ciminstance|gwmi)\s+[^\n]*win32_shadowcopy[^\n]*\|\s*(remove|%|foreach)|wmic(\.exe)?\s+shadowcopy\s+delete|delete\s+shadows\s+all|diskshadow[^\n]*delete'
+tags = ["impact"]
+why = "Deleting Volume Shadow Copies removes the built-in way to restore files - done by almost every ransomware family right before encryption."
+
+[[rule]]
+id = "PD-X002"
+name = "Encryption over many files"
+tactic = "impact"
+mitre = "T1486"
+weight = 30
+pattern = '(createencryptor\(|cryptography\.(aes|rijndael)\w*)[\s\S]{0,400}(get-childitem|foreach|-recurse)|(get-childitem|-recurse)[\s\S]{0,400}createencryptor\(|gpg(\.exe)?["\x27]?\s+[^\n]*(\s-c\b|--symmetric|--encrypt)|\bcipher(\.exe)?\s+/e\b|7z(a)?(\.exe)?\s+a\s+[^\n]*-p\S+[^\n]*-sdel'
+tags = ["impact"]
+why = "Encrypting files in a loop (with a key the owner doesn't control) is ransomware behaviour."
+
+[[rule]]
+id = "PD-X003"
+name = "Ransom note"
+tactic = "impact"
+mitre = "T1491.001"
+weight = 35
+min_verdict = "SUSPICIOUS"
+pattern = '(your|all)\s+(files|data|documents)\s+(are|have been|were)\s+(encrypted|locked|stolen)|(read_?me|how_?to_?decrypt|restore_?files|decrypt_?instructions)[\w.-]*\.(txt|html|hta)|ransom[_ -]?note|!!!\s*read[_ ]?me|\bdecryptor\b[\s\S]{0,200}(contact|tor|onion|price)|\bbitcoin\b[\s\S]{0,200}(decrypt|recover)|(decrypt|recover)[\s\S]{0,200}\b(bitcoin|monero|tor browser)\b'
+tags = ["impact"]
+why = "Text typical of a ransom/extortion note is being written or displayed."
+
+[[rule]]
+id = "PD-X004"
+name = "Destructive disk or file wipe"
+tactic = "impact"
+mitre = "T1485, T1561"
+weight = 45
+min_verdict = "SUSPICIOUS"
+pattern = '\bcipher(\.exe)?\s+/w:|format-volume\s+[^\n]*-force|clear-disk\s+[^\n]*-removedata|\bsdelete(64)?(\.exe)?\b|remove-item\s+[^\n]*-recurse[^\n]*(c:\\(windows|users|programdata)\\?["\x27]?\s|\$env:systemroot)|\bdel(\.exe)?\s+/[sfq][^\n]*c:\\(\*|windows|users)|\bformat(\.com)?\s+[c-z]:\s+/[qy]|\bfsutil(\.exe)?\s+(file\s+setzerodata|usn\s+deletejournal)|\\\\\.\\physicaldrive\d'
+tags = ["impact"]
+why = "Wiping free space, disks, the USN journal or system folders destroys data or evidence irrecoverably."
+
+[[rule]]
+id = "PD-X005"
+name = "Backup / database / security services stopped"
+tactic = "impact"
+mitre = "T1489"
+weight = 25
+pattern = '(stop-service|net(1)?\s+stop|sc(\.exe)?\s+(stop|config)|set-service)\s+[^\n]*(\bvss\b|veeam|backupexec|\bbackup|wbengine|sqlwriter|msexchange|sophos|\bsql\w*\b[^\n]*-force|acronis|memtas|mepocs|\bsvc\$|swprv)|(stop-service|net(1)?\s+stop)[\s\S]{0,40}\bforeach\b|\biisreset(\.exe)?\s+/stop'
+tags = ["impact"]
+why = "Ransomware stops backup, VSS, database and mail services so their files can be encrypted and backups cannot be used."
+fp = "Planned maintenance of SQL/backup services."
+
+[[rule]]
+id = "PD-X006"
+name = "System recovery disabled"
+tactic = "impact"
+mitre = "T1490"
+weight = 50
+min_verdict = "MALICIOUS"
+pattern = 'bcdedit(\.exe)?\s+[^\n]*(recoveryenabled\s+(no|off|false)|bootstatuspolicy\s+ignoreallfailures|safeboot)|wbadmin(\.exe)?\s+[^\n]*delete\s+(catalog|systemstatebackup|backup)|reagentc(\.exe)?\s+/disable|disable-computerrestore|systemrestore[^\n]*disablesr[^\n]*\b1\b|wmic(\.exe)?\s+[^\n]*shadowstorage'
+tags = ["impact"]
+why = "Disabling Windows recovery, safe mode or backups prevents the victim from restoring the system - a ransomware preparation step."
+
+[[rule]]
+id = "PD-X008"
+name = "Shadow-copy storage shrunk"
+tactic = "impact"
+mitre = "T1490"
+weight = 40
+min_verdict = "SUSPICIOUS"
+pattern = 'vssadmin(\.exe)?\s+[^\n]*resize\s+shadowstorage'
+tags = ["impact"]
+why = "Shrinking shadow-copy storage silently deletes existing restore points - a stealthier alternative to 'delete shadows' used by ransomware."
+fp = "Disk-space housekeeping by admins (rare)."
+
+[[rule]]
+id = "PD-X009"
+name = "Cryptocurrency miner"
+tactic = "impact"
+mitre = "T1496"
+weight = 50
+min_verdict = "MALICIOUS"
+pattern = '\b(xmrig|xmr-stak|minerd|cpuminer|nbminer|t-rex|phoenixminer|lolminer|nicehash\w*|ethminer|cryptonight|randomx)\b|stratum\+(tcp|ssl)://|--donate-level|pool\.(minexmr|supportxmr|hashvault)|moneroocean|\bmonero\b[^\n]*(wallet|pool)'
+tags = ["impact"]
+why = "Mining software and mining-pool URLs indicate the host's resources are being hijacked for cryptocurrency."
+
+[[rule]]
+id = "PD-X007"
+name = "Wallpaper / defacement change with message"
+tactic = "impact"
+mitre = "T1491.001"
+weight = 15
+pattern = 'systemparametersinfo[\s\S]{0,200}(0x14|20)\b|control panel\\desktop[^\n]*wallpaper[\s\S]{0,300}(encrypted|ransom|bitcoin)'
+tags = ["impact"]
+why = "Programmatic wallpaper change, used by ransomware to display the ransom demand."
+
+# =====================================================================
+# OFFENSIVE TOOLING
+# =====================================================================
+[[rule]]
+id = "PD-T001"
+name = "Known offensive PowerShell framework"
+tactic = "execution"
+mitre = "T1059.001"
+weight = 60
+min_verdict = "MALICIOUS"
+pattern = 'powersploit|powerview|invoke-shellcode|invoke-reflectivepeinjection|invoke-dllinjection|invoke-tokenmanipulation|\bpowerup\b|invoke-allchecks|nishang|invoke-powershelltcp|powershellempire|empire\.\w+|invoke-empire|powercat|invoke-thehash|invoke-bloodhound|get-netdomaincontroller|invoke-userhunter|invoke-sharefinder|cobaltstrike|beacon\.dll|\binveigh|invoke-inveigh|\bpowershdll|\bposhc2|\bcovenant|grunt\.exe|\bsilenttrinity|\bsliver\b|\bhavoc\b|\bpowermad|\bpowerupsql|invoke-sqloscmd|out-ath\w+|invoke-atomictest|invoke-psinject|invoke-runas|invoke-phant0m|invoke-obfuscation|invoke-cradlecrafter|\bwinpwn\b|\bpowersharppack|\bsharpsploit|invoke-sharp\w+|invoke-seatbelt|invoke-rubeus|\bpsattack\b|\bdnscat2'
+tags = ["execute"]
+why = "Functions and names from public offensive frameworks (PowerSploit, Empire, Nishang, Cobalt Strike, Inveigh, WinPwn ...). Their presence means attack tooling is running."
+fp = "Authorised penetration tests and red-team exercises."
+
+[[rule]]
+id = "PD-T002"
+name = "Offensive tool binary"
+tactic = "execution"
+mitre = "T1588.002"
+weight = 45
+min_verdict = "SUSPICIOUS"
+pattern = '\b(rubeus|seatbelt|sharphound|certify|sharpview|sharpwmi|sharpdpapi|sharpchrome|sharprdp|sharpexec|sharpmove|sharplaps|sharpgpoabuse|safetykatz|nanodump|handlekatz|pplblade|ppldump|edrsandblast|stracciatella|spoolsample|petitpotam|dfscoerce|coercer|responder|inveigh|chisel|ligolo|mythic|merlin|bruteratel|badger\.exe|nighthawk|evil-winrm|kerbrute|bmc-tools|soaphound|sharpsccm|sccmhunter|krbrelayup|ntlmrelayx)(\.exe|\.ps1|\.py)?\b'
+tags = ["execute"]
+why = "Names of well-known red-team / attacker tools (C# post-exploitation, coercion, relaying, tunnelling)."
+fp = "Authorised security testing."
+
+# =====================================================================
+# COMBINATIONS - capabilities that are dangerous together
+# =====================================================================
+[[combo]]
+id = "CB-DL-INMEM"
+name = "Downloads code and runs it in memory"
+tactic = "execution"
+mitre = "T1105, T1059.001"
+weight = 30
+min_verdict = "MALICIOUS"
+all_tags = ["download", "inmemory"]
+why = "Network download combined with in-memory execution (Invoke-Expression, script blocks, reflective loading) is a fileless stager: nothing touches disk for AV to scan."
+
+[[combo]]
+id = "CB-DL-EXEC"
+name = "Downloads something and executes"
+tactic = "execution"
+mitre = "T1105, T1204"
+weight = 20
+min_verdict = "SUSPICIOUS"
+all_tags = ["download", "execute"]
+why = "The script both fetches content from the network and starts code - the basic dropper pattern. Review the source URL."
+fp = "Silent software installs (download installer, then run it)."
+
+[[combo]]
+id = "CB-EVADE-ACT"
+name = "Disables defences and then acts"
+tactic = "defense-impairment"
+mitre = "T1562"
+weight = 25
+min_verdict = "MALICIOUS"
+all_tags = ["evasion"]
+any_tags = ["download", "execute", "injection", "credential", "c2", "persistence", "payload", "impact"]
+why = "Weakening security controls in the same command that downloads, executes, persists or steals credentials shows intent: the defences are being removed for a reason."
+
+[[combo]]
+id = "CB-OBF-CAP"
+name = "Obfuscation hiding a dangerous capability"
+tactic = "stealth"
+mitre = "T1027"
+weight = 15
+min_verdict = "SUSPICIOUS"
+all_tags = ["obfuscation"]
+any_tags = ["download", "execute", "injection", "c2", "credential", "evasion", "persistence", "impact"]
+why = "The command is obfuscated AND does something dangerous. Legitimate tools have no reason to hide what they do."
+
+[[combo]]
+id = "CB-STEALTH-LAUNCH"
+name = "Hidden/encoded launch of a dangerous capability"
+tactic = "stealth"
+mitre = "T1564.003"
+weight = 15
+all_tags = ["stealthy-launch"]
+any_tags = ["download", "c2", "injection", "credential", "evasion", "inmemory"]
+why = "A hidden or encoded PowerShell window doing network, injection, persistence or credential work is how stagers are launched from macros and LNK files."
+
+[[combo]]
+id = "CB-DECODE-EXEC"
+name = "Decodes an embedded payload and executes it"
+tactic = "stealth"
+mitre = "T1140, T1620"
+weight = 25
+min_verdict = "MALICIOUS"
+all_tags = ["decode"]
+any_tags = ["inmemory", "injection"]
+why = "Unpacking base64/compressed/XOR data and passing it straight to execution or memory injection is a packed loader."
+
+[[combo]]
+id = "CB-PAYLOAD-INJECT"
+name = "Embedded payload plus injection APIs"
+tactic = "stealth"
+mitre = "T1055"
+weight = 25
+min_verdict = "MALICIOUS"
+all_tags = ["payload", "injection"]
+why = "Inline shellcode or an embedded binary together with memory-allocation/thread APIs is a shellcode runner."
+
+[[combo]]
+id = "CB-CRED-OUT"
+name = "Steals credentials and sends them out"
+tactic = "credential-access"
+mitre = "T1555, T1041"
+weight = 25
+min_verdict = "MALICIOUS"
+all_tags = ["credential"]
+any_tags = ["exfil", "c2", "download"]
+why = "Credential access in the same command as a network channel suggests the stolen secrets leave the host."
+
+[[combo]]
+id = "CB-PERSIST-PAYLOAD"
+name = "Persistence for a remote or hidden payload"
+tactic = "persistence"
+mitre = "T1053, T1547"
+weight = 20
+min_verdict = "SUSPICIOUS"
+all_tags = ["persistence"]
+any_tags = ["download", "c2", "obfuscation", "stealthy-launch", "payload", "inmemory"]
+why = "Making something start automatically is normal; making a downloaded, hidden or obfuscated payload start automatically is an implant."
+
+[[combo]]
+id = "CB-PRIV-CRED"
+name = "Privilege escalation combined with credential access"
+tactic = "privilege-escalation"
+mitre = "T1134, T1003"
+weight = 20
+min_verdict = "MALICIOUS"
+all_tags = ["privesc", "credential"]
+why = "Elevating to SYSTEM/debug rights and then touching credential stores is the textbook path to dumping secrets."
+
+[[combo]]
+id = "CB-LATERAL-ACT"
+name = "Remote execution carrying a payload"
+tactic = "lateral-movement"
+mitre = "T1021"
+weight = 15
+min_verdict = "SUSPICIOUS"
+all_tags = ["lateral"]
+any_tags = ["download", "inmemory", "credential", "persistence", "payload", "evasion"]
+why = "Remote execution used to download, persist, evade or steal credentials on another host is lateral spread, not administration."
+
+[[combo]]
+id = "CB-RANSOM"
+name = "Ransomware preparation pattern"
+tactic = "impact"
+mitre = "T1486, T1490"
+weight = 30
+min_verdict = "MALICIOUS"
+all_tags = ["impact", "evasion"]
+why = "Inhibiting recovery or stopping services together with defence evasion or encryption is the run-up to (or execution of) ransomware."

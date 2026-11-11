@@ -1,0 +1,15 @@
+# Legitimate-but-sensitive admin actions. These SHOULD be reviewed (SUSPICIOUS is
+# fine) but must never be MALICIOUS on their own.
+Add-MpPreference -ExclusionPath "D:\SQLData"
+Import-Certificate -FilePath C:\certs\contoso-root.cer -CertStoreLocation Cert:\LocalMachine\Root
+Add-LocalGroupMember -Group "Administrators" -Member "CONTOSO\helpdesk"
+Add-ADGroupMember -Identity "Domain Admins" -Members adm_jdoe
+Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 0
+Set-Item WSMan:\localhost\Client\TrustedHosts -Value * -Force
+New-NetFirewallRule -DisplayName "RDP" -Direction Inbound -LocalPort 3389 -Protocol TCP -Action Allow
+Start-Process "C:\Program Files\TeamViewer\TeamViewer.exe"
+psexec \\srv01 -s cmd /c "ipconfig /all"
+procdump -ma w3wp.exe C:\dumps\w3wp.dmp
+Get-ChildItem -Path C:\Shares -Recurse -Include *.kdbx, *password* -ErrorAction SilentlyContinue
+Register-ScheduledTask -TaskName "Temp cleanup" -Action (New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -WindowStyle Hidden -File C:\Scripts\cleanup.ps1') -Trigger (New-ScheduledTaskTrigger -AtStartup)
+ENC: Invoke-WebRequest -Uri https://deploy.contoso.com/agent.msi -OutFile $env:TEMP\agent.msi; msiexec /i $env:TEMP\agent.msi /qn
