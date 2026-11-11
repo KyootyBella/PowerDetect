@@ -60,10 +60,17 @@ uv sync
 uv run powerdetect --help
 ```
 
-To install `powerdetect` as a command available everywhere:
+To install `powerdetect` as a command available everywhere, straight from
+GitHub:
 
 ```bash
-uv tool install PowerDetect
+uv tool install git+https://github.com/KyootyBella/PowerDetect
+```
+
+or from a local checkout:
+
+```bash
+uv tool install .
 ```
 
 ## Website (no Python needed)
