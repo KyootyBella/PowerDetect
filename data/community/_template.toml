@@ -1,0 +1,19 @@
+# Copy this file to data/community/<short-name>.toml (no leading underscore),
+# fill it in, and run:  uv run python tools/check_fingerprints.py
+# See CONTRIBUTING.md for the full guide.
+
+[[fingerprint]]
+# "structural" (whole command, all decoded layers) or "payload" (innermost layer only)
+type = "structural"
+# 16 hex characters, from the website export, --export-fingerprints, or the checker's output
+value = "0000000000000000"
+# What it is, in a few words. Name the tool / malware family / campaign if known.
+label = "TODO"
+# SUSPICIOUS or MALICIOUS. Allow-lists (LOW) are not accepted here.
+verdict = "MALICIOUS"
+# The command line, cleaned of anything from your own environment (see CONTRIBUTING.md).
+sample = 'powershell.exe -nop -w hidden -c "..."'
+# Optional:
+mitre = "T1059.001"
+reference = "https://example.com/report-describing-this"
+author = "your GitHub name"

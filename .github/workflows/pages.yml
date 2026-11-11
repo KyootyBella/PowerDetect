@@ -21,6 +21,8 @@ jobs:
       - uses: astral-sh/setup-uv@v10.3.3
       - run: uv sync --locked
       - run: uv run pytest -q
+      # Re-derives every contributed fingerprint from its sample command.
+      - run: uv run python tools/check_fingerprints.py
 
   build:
     needs: test

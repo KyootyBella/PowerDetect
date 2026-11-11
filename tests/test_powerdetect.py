@@ -343,3 +343,91 @@ def test_verbose_run_through(capsys):
     main(["--no-color", "-v", "Get-Date; iex 'x'"])
     out = capsys.readouterr().out
     assert "Run-through" in out and "! [L0#1]" in out and "  [L0#0] Get-Date" in out
+
+
+# ---------------------------------------------------------------- contributed fingerprints
+import sys as _sys  # noqa: E402
+
+_sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+import check_fingerprints  # noqa: E402
+
+CONTRIB_SAMPLE = f"powershell -nop -w hidden -c \"{CRADLE}\""
+
+
+def _entry(**over):
+    from powerdetect.fingerprint import toml_str
+    e = {"type": "structural", "value": analyze(CONTRIB_SAMPLE).fingerprints["structural"],
+         "label": "Test cradle", "verdict": "MALICIOUS", "sample": CONTRIB_SAMPLE}
+    e.update(over)
+    body = "\n".join(f"{k} = {toml_str(v) if isinstance(v, str) else v}" for k, v in e.items())
+    return f"[[fingerprint]]\n{body}\n"
+
+
+def test_community_folder_passes_checker():
+    problems, _ = check_fingerprints.check([check_fingerprints.COMMUNITY])
+    assert problems == []
+
+
+def test_checker_accepts_valid_entry(tmp_path):
+    f = tmp_path / "ok.toml"
+    f.write_text(_entry(mitre="T1059.001, T1105", reference="https://example.com/x"), encoding="utf-8")
+    assert check_fingerprints.check([f])[0] == []
+
+
+@pytest.mark.parametrize("over, expect", [
+    ({"value": "0123456789abcdef"}, "fingerprint is"),
+    ({"verdict": "LOW"}, "contributions must be"),
+    ({"type": "behavior"}, "type 'behavior'"),
+    ({"label": "TODO"}, "real label"),
+    ({"mitre": "execution"}, "not an ATT&CK technique"),
+    ({"reference": "http://example.com"}, "https://"),
+    ({"colour": "red"}, "unknown keys"),
+])
+def test_checker_rejects(tmp_path, over, expect):
+    f = tmp_path / "bad.toml"
+    f.write_text(_entry(**over), encoding="utf-8")
+    problems = check_fingerprints.check([f])[0]
+    assert any(expect in p for p in problems), problems
+
+
+def test_checker_rejects_known_good_match(tmp_path):
+    good = "Get-Service | Where-Object Status -eq Running"
+    f = tmp_path / "broad.toml"
+    f.write_text(_entry(sample=good, value=analyze(good).fingerprints["structural"]), encoding="utf-8")
+    problems = check_fingerprints.check([f])[0]
+    assert any("known-good" in p for p in problems), problems
+
+
+def test_checker_rejects_duplicates(tmp_path):
+    f = tmp_path / "dup.toml"
+    f.write_text(_entry() + "\n" + _entry(label="Same again"), encoding="utf-8")
+    assert any("duplicate" in p for p in check_fingerprints.check([f])[0])
+
+
+def test_db_loads_folders_and_several_paths(tmp_path):
+    from powerdetect.fingerprint import FingerprintDB
+    (tmp_path / "a.toml").write_text(_entry(), encoding="utf-8")
+    (tmp_path / "_skip.toml").write_text("not toml at all [", encoding="utf-8")
+    other = tmp_path / "other.toml"
+    other.write_text(_entry(type="payload", value=analyze(CONTRIB_SAMPLE).fingerprints["payload"]),
+                     encoding="utf-8")
+    db = FingerprintDB(tmp_path, other)
+    assert len(db.entries) == 3  # a.toml + other.toml (again, via the folder) + other.toml
+    r = analyze(CONTRIB_SAMPLE, db=db)
+    assert r.known and r.known[0]["label"] == "Test cradle"
+
+
+def test_export_is_a_valid_contribution_after_labelling(tmp_path):
+    import tomllib
+    src = tmp_path / "cmds.txt"
+    src.write_text(CONTRIB_SAMPLE + "\n", encoding="utf-8")
+    out = tmp_path / "export.toml"
+    main(["-f", str(src), "--no-color", "-q", "--export-fingerprints", str(out)])
+    data = tomllib.loads(out.read_text(encoding="utf-8"))
+    assert data["fingerprint"][0]["sample"] == CONTRIB_SAMPLE
+    assert "T1059.001" in data["fingerprint"][0]["mitre"]
+    labelled = out.read_text(encoding="utf-8").replace('label = "TODO"', 'label = "Test cradle"')
+    contrib = tmp_path / "contrib.toml"
+    contrib.write_text("\n".join(l for l in labelled.splitlines() if not l.startswith("#")),
+                       encoding="utf-8")
+    assert check_fingerprints.check([contrib])[0] == []

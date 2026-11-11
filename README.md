@@ -10,6 +10,9 @@ The same input always gives the same output. There is no ML and no network
 access at analysis time, and the tool itself has no external dependencies
 (Python 3.11+ standard library only).
 
+Test it in the browser at https://kyootybella.github.io/PowerDetect/ (no Python needed).
+The static site bundles the Python runtime and the same rules and fingerprint database as the CLI.
+
 ## How it decides
 
 1. **Parse** (`cmdline.py`): if the command line starts with `powershell` or
@@ -143,7 +146,7 @@ powerdetect "powershell -nop -w hidden -enc JABjAD0A..."
 ```
 
 ```bash
-powerdetect --csv hunting_export.csv -q --known data/known_fingerprints.toml
+powerdetect --csv hunting_export.csv -q --known data/known_fingerprints.toml --known data/community
 ```
 
 ```bash
@@ -161,7 +164,7 @@ powerdetect -f suspicious_script.ps1 --whole -v
 | `-q`                         | Only print non-LOW commands, plus the summary.                                                        |
 | `-v`                         | Full run-through: every statement in order, the skeleton, and every layer.                            |
 | `-o json\|jsonl`             | Machine-readable output for SOAR, including all hits, explanations and fingerprints.                  |
-| `--known FILE`               | Labelled fingerprint database (known attacks, or an allow-list).                                      |
+| `--known PATH`               | Labelled fingerprints (known attacks, or an allow-list): a TOML file or a folder of them. Repeatable. |
 | `--export-fingerprints FILE` | Write a labelling template for every non-LOW fingerprint.                                             |
 | `--rules FILE`               | Use a custom rules file.                                                                              |
 
@@ -228,6 +231,15 @@ values with placeholders: URLs, IPs, numbers, base64, byte arrays and paths.
 It also renames variables to `$v1`, `$v2` …, expands aliases, and normalizes
 quoting. As a result, `IEX (New-Object Net.WebClient).DownloadString(…)`,
 ``I`E`X (…)`` and `&('I'+'EX') (…)` all produce the same fingerprint.
+
+### Contributing fingerprints
+
+Seen something PowerDetect should recognise? Contributed fingerprints live in
+[`data/community/`](data/community/), one file per contribution, and ship with
+the website. Each entry includes a cleaned-up example command, and
+`tools/check_fingerprints.py` re-derives its fingerprint so nothing is taken
+on trust. See [CONTRIBUTING.md](CONTRIBUTING.md) for the steps, or open a
+**Fingerprint contribution** issue if you don't use git.
 
 ### Building the known-fingerprint database from public attack data
 

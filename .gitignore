@@ -17,7 +17,6 @@ vendor/
 data/sources/
 data/*.txt
 
-# Local editor and assistant settings
-.claude/
+# Local editor settings
 .vscode/
 .idea/

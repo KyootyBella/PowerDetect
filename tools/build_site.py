@@ -17,9 +17,12 @@ import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from powerdetect.fingerprint import toml_files, toml_str  # noqa: E402
 WEB = ROOT / "web"
 PKG = ROOT / "powerdetect"
 DB = ROOT / "data" / "known_fingerprints.toml"
+COMMUNITY = ROOT / "data" / "community"
 OUT = ROOT / "docs"
 PKG_FILES = ["__init__.py", "cmdline.py", "deobfuscate.py", "engine.py", "fingerprint.py",
              "statements.py", "webapi.py", "rules.toml"]
@@ -61,9 +64,18 @@ def main() -> None:
         files.append(f"powerdetect/{name}")
 
     db_name = None
-    if DB.exists() and not a.no_db:
+    community = toml_files(COMMUNITY) if COMMUNITY.is_dir() else []
+    if (DB.exists() or community) and not a.no_db:
         # drop the '# example:' comments (raw attack commands) - only hashes and labels ship
-        lines = [l for l in DB.read_text(encoding="utf-8").splitlines() if not l.startswith("# example:")]
+        lines = [l for l in DB.read_text(encoding="utf-8").splitlines()
+                 if not l.startswith("# example:")] if DB.exists() else []
+        # contributed entries: keep only what matching needs (no `sample` command lines)
+        for f in community:
+            for e in tomllib.loads(f.read_text(encoding="utf-8")).get("fingerprint", []):
+                lines += ["", f"# community: {f.name}", "[[fingerprint]]",
+                          f"type = {toml_str(e['type'])}", f"value = {toml_str(e['value'])}",
+                          f"label = {toml_str(e['label'])}", f"verdict = {toml_str(e['verdict'])}",
+                          'source = "community"']
         text = "\n".join(lines) + "\n"
         tomllib.loads(text)  # validate
         (OUT / "py" / "known_fingerprints.toml").write_text(text, encoding="utf-8")

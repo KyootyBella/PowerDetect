@@ -1,0 +1,65 @@
+name: Fingerprint contribution
+description: Share a malicious or suspicious PowerShell command line PowerDetect should recognise.
+title: "[fingerprint] "
+labels: ["fingerprint"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! A maintainer will compute the fingerprint and add it to `data/community/`.
+        Prefer a pull request? See [CONTRIBUTING.md](https://github.com/KyootyBella/PowerDetect/blob/main/CONTRIBUTING.md).
+
+        **This issue is public.** Remove internal host names, domains, user names and secrets first.
+        URLs, IPs, paths and numbers don't affect the fingerprint, so you can swap them for
+        documentation values like `203.0.113.5` or `https://cdn.example/a.ps1`.
+  - type: textarea
+    id: sample
+    attributes:
+      label: Command line (cleaned)
+      description: The full ProcessCommandLine, or the script, exactly as seen apart from your cleaning.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: label
+    attributes:
+      label: Label
+      description: What it is, for the analyst who sees it next. Name the tool, family or campaign if known.
+      placeholder: "ClickFix lure: clipboard to iex via mshta"
+    validations:
+      required: true
+  - type: dropdown
+    id: verdict
+    attributes:
+      label: Verdict
+      options:
+        - MALICIOUS
+        - SUSPICIOUS
+    validations:
+      required: true
+  - type: input
+    id: mitre
+    attributes:
+      label: ATT&CK techniques (optional)
+      placeholder: "T1059.001, T1105"
+  - type: input
+    id: reference
+    attributes:
+      label: Public reference (optional)
+      description: A report or write-up describing this activity.
+      placeholder: "https://..."
+  - type: input
+    id: fingerprint
+    attributes:
+      label: Fingerprint (optional)
+      description: The structural fingerprint from the website or CLI export, if you have it.
+      placeholder: "1a2b3c4d5e6f7a8b"
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before submitting
+      options:
+        - label: I removed everything from my own environment (internal names, users, secrets).
+          required: true
+        - label: I'm allowed to share this command, and it may be published under the MIT license.
+          required: true

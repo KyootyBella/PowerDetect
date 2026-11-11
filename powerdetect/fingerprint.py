@@ -110,26 +110,44 @@ class KnownEntry:
     verdict: str | None = None
 
 
+FP_TYPES = ("structural", "payload", "behavior", "exact")
+
+
+def toml_files(path: Path | str) -> list[Path]:
+    """A .toml file, or every .toml file in a folder (sorted; names starting with '_' skipped)."""
+    p = Path(path)
+    if p.is_dir():
+        return sorted(f for f in p.glob("*.toml") if not f.name.startswith("_"))
+    return [p]
+
+
 class FingerprintDB:
-    """TOML file of analyst-labelled fingerprints:
+    """One or more TOML files (or folders of them) of analyst-labelled fingerprints:
 
         [[fingerprint]]
         type = "structural"
         value = "1a2b3c4d5e6f7a8b"
         label = "WebClient download cradle"
         verdict = "MALICIOUS"   # optional; "LOW" allow-lists a known-good script
+
+    Extra keys (sample, mitre, reference, author ...) are allowed and ignored here.
     """
 
-    def __init__(self, path: Path | str):
+    def __init__(self, *paths: Path | str):
+        self.entries: list[KnownEntry] = []
+        for path in paths:
+            for f in toml_files(path):
+                self._load(f)
+
+    def _load(self, path: Path) -> None:
         with open(path, "rb") as f:
             cfg = tomllib.load(f)
-        self.entries: list[KnownEntry] = []
         for e in cfg.get("fingerprint", []):
             v = e.get("verdict")
             if v is not None and v not in _RANK:
-                raise ValueError(f"bad verdict {v!r} for fingerprint {e.get('value')}")
-            if e.get("type", "structural") not in ("structural", "payload", "behavior", "exact"):
-                raise ValueError(f"bad fingerprint type {e.get('type')!r}")
+                raise ValueError(f"{path.name}: bad verdict {v!r} for fingerprint {e.get('value')}")
+            if e.get("type", "structural") not in FP_TYPES:
+                raise ValueError(f"{path.name}: bad fingerprint type {e.get('type')!r}")
             self.entries.append(KnownEntry(e.get("type", "structural"), e["value"].lower(),
                                            e.get("label", ""), v))
 
@@ -137,18 +155,34 @@ class FingerprintDB:
         return [e for e in self.entries if fps.get(e.type) == e.value]
 
 
+def toml_str(s: str) -> str:
+    """A TOML basic string (JSON string escaping is valid TOML)."""
+    import json
+    return json.dumps(s, ensure_ascii=False)
+
+
+EXPORT_HEADER = """\
+# PowerDetect fingerprint export.
+# Fill in each label, then use the file with --known, or contribute it
+# (see CONTRIBUTING.md). Before sharing: replace anything from your own
+# environment in `sample` (host names, user names, internal domains) and
+# check the fingerprint still matches with tools/check_fingerprints.py.
+"""
+
+
 def export_toml(reports, path: Path | str) -> int:
     """Write a labelling template for every non-LOW command (deduped by structural fp)."""
-    seen, out = set(), ["# PowerDetect fingerprint export - fill in labels, then use with --known\n"]
+    seen, out = set(), [EXPORT_HEADER]
     for r in reports:
         fp = r.fingerprints["structural"]
         if r.verdict == "LOW" or fp in seen:
             continue
         seen.add(fp)
-        example = r.raw.replace("\r", " ").replace("\n", " ")[:150]
-        reasons = ", ".join(h.id for h in r.hits[:6])
-        out.append(f"# example: {example}\n# rules: {reasons}\n"
+        mitre = sorted({t.strip() for h in r.hits for t in (h.mitre or "").split(",") if t.strip()})
+        out.append(f"# rules: {', '.join(h.id for h in r.hits[:6])}\n"
                    f"[[fingerprint]]\ntype = \"structural\"\nvalue = \"{fp}\"\n"
-                   f"label = \"TODO\"\nverdict = \"{r.verdict}\"\n")
+                   f"label = \"TODO\"\nverdict = \"{r.verdict}\"\n"
+                   f"mitre = {toml_str(', '.join(mitre))}\n"
+                   f"sample = {toml_str(r.raw)}\n")
     Path(path).write_text("\n".join(out), encoding="utf-8")
     return len(seen)

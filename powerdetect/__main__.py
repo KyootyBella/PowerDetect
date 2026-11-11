@@ -195,7 +195,9 @@ def main(argv=None) -> int:
     p.add_argument("--csv", help="Defender Advanced Hunting CSV export")
     p.add_argument("--json", help="Defender alert / hunting JSON export")
     p.add_argument("--rules", default=None, help="custom rules.toml")
-    p.add_argument("--known", help="TOML file of labelled fingerprints (known bad / allow-list)")
+    p.add_argument("--known", action="append", metavar="PATH",
+                   help="TOML file or folder of labelled fingerprints (known bad / allow-list); "
+                        "repeat to load several")
     p.add_argument("--export-fingerprints", metavar="PATH",
                    help="write a TOML labelling template for all non-LOW fingerprints")
     p.add_argument("-o", "--output", choices=["text", "json", "jsonl"], default="text")
@@ -208,7 +210,7 @@ def main(argv=None) -> int:
 
     try:
         rules = Rules(a.rules) if a.rules else Rules()
-        db = FingerprintDB(a.known) if a.known else None
+        db = FingerprintDB(*a.known) if a.known else None
         cmds = collect(a)
     except Exception as e:  # noqa: BLE001
         print(f"error: {e}", file=sys.stderr)
