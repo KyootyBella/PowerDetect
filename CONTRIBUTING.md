@@ -17,7 +17,7 @@ fingerprint helps the next analyst who sees it.
   anyone wants.
 - **Flags only.** Contributions are `SUSPICIOUS` or `MALICIOUS`. Allow-lists
   (`LOW`) depend on your environment, so keep them in your own file (`--known
-  my_allowlist.toml`). That way nobody can contribute an entry that silences
+my_allowlist.toml`). That way nobody can contribute an entry that silences
   detection for everyone.
 - **`structural` or `payload` type.** `behavior` is too broad to share and
   `exact` too narrow.
@@ -47,13 +47,13 @@ PowerDetect's fingerprint ignores **URLs, IP addresses, file paths, numbers,
 long base64 strings and variable names**. Replace those freely and the
 fingerprint stays the same. Use documentation values:
 
-| Replace | With |
-| --- | --- |
-| IP addresses | `192.0.2.10`, `198.51.100.7`, `203.0.113.5` |
-| Domains and URLs | `example.com`, `https://cdn.example/a.ps1` |
-| User folders | `C:\Users\user\...` |
+| Replace          | With                                        |
+| ---------------- | ------------------------------------------- |
+| IP addresses     | `192.0.2.10`, `198.51.100.7`, `203.0.113.5` |
+| Domains and URLs | `example.com`, `https://cdn.example/a.ps1`  |
+| User folders     | `C:\Users\user\...`                         |
 
-If you must change something the fingerprint does *not* ignore, such as a
+If you must change something the fingerprint does _not_ ignore, such as a
 bare host name or a user name inside a string, the fingerprint will change,
 and the entry will then match only the cleaned version. In that case,
 consider whether the entry is still useful, or skip that command.
@@ -88,6 +88,7 @@ uv run python tools/check_fingerprints.py
 The checker runs PowerDetect on every `sample` and confirms that the
 fingerprint comes out as the `value` you wrote. If you cleaned the sample
 after exporting, it tells you the new value. It also rejects:
+
 - entries that would match one of the known-good commands in `tests/data/`,
 - duplicate entries,
 - `LOW` verdicts,
